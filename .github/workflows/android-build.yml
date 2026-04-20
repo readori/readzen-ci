@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - 'TRIGGER_DEPLOY'
       - 'TRIGGER_DIAG'
+      - 'TRIGGER_KEYSTORE'
       - '*.md'
       - '.github/workflows/deploy-backend.yml'
       - '.github/workflows/build-diagnostic.yml'
