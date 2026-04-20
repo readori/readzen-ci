@@ -75,30 +75,34 @@ jobs:
 
       - name: Restore cached keystore
         id: cache-keystore
+        continue-on-error: true
         uses: actions/cache@v4
         with:
           path: ~/.android/readzen-ci.keystore
           key: readzen-debug-keystore-v1
 
-      - name: Generate keystore (first run only)
-        if: steps.cache-keystore.outputs.cache-hit != 'true'
+      - name: Generate keystore if needed
         run: |
-          mkdir -p $HOME/.android
-          keytool -genkeypair \
-            -alias readzen-debug \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 36500 \
-            -keystore "$HOME/.android/readzen-ci.keystore" \
-            -storepass readzen2024 \
-            -keypass readzen2024 \
-            -dname "CN=ReadZen CI, OU=Development, O=ReadZen, L=Unknown, ST=Unknown, C=US"
-          echo "✅ New keystore generated (will be cached for future builds)"
+          if [ ! -f "$HOME/.android/readzen-ci.keystore" ]; then
+            echo "Keystore not found (cache miss or service down), generating..."
+            mkdir -p $HOME/.android
+            keytool -genkeypair \
+              -alias readzen-debug \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 36500 \
+              -keystore "$HOME/.android/readzen-ci.keystore" \
+              -storepass readzen2024 \
+              -keypass readzen2024 \
+              -dname "CN=ReadZen CI, OU=Development, O=ReadZen, L=Unknown, ST=Unknown, C=US"
+            echo "✅ New keystore generated"
+          else
+            echo "✅ Keystore restored from cache"
+          fi
 
       - name: Set keystore path
         run: |
           echo "CI_KEYSTORE_PATH=$HOME/.android/readzen-ci.keystore" >> $GITHUB_ENV
-          echo "✅ Using cached keystore for consistent APK signatures"
 
       - name: Setup Gradle
         id: setup_gradle
@@ -112,10 +116,8 @@ jobs:
         if: steps.setup_gradle.outcome == 'failure'
         run: |
           echo "⚠️ Gradle action failed, installing manually..."
-          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip || {
-            echo "Primary CDN failed, trying mirror..."
-            curl -sL "https://downloads.gradle-dn.com/distributions/gradle-8.5-bin.zip" -o gradle.zip
-          }
+          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip || \
+          curl -sL "https://downloads.gradle-dn.com/distributions/gradle-8.5-bin.zip" -o gradle.zip
           unzip -q gradle.zip -d /opt
           echo "/opt/gradle-8.5/bin" >> $GITHUB_PATH
           echo "✅ Gradle 8.5 installed manually"
@@ -125,14 +127,11 @@ jobs:
         run: |
           gradle wrapper --gradle-version 8.5
           chmod +x gradlew
-          echo "✅ Gradle wrapper generated"
 
       - name: Build Debug APK
         id: debug_build
         working-directory: android
-        run: |
-          set -o pipefail
-          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build-debug.log
+        run: ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build-debug.log
         env:
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
           CI_KEYSTORE_PATH: ${{ env.CI_KEYSTORE_PATH }}
@@ -142,15 +141,12 @@ jobs:
         working-directory: android
         run: |
           echo "## 🔴 Debug Build Failed" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Compilation Errors" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -E "^e:|error:|Error:|FAILURE|Unresolved reference|Cannot find|not found|Expecting|Overload resolution|None of the following|Type mismatch|Conflicting" build-debug.log | head -80 >> $GITHUB_STEP_SUMMARY || echo "No specific error lines found" >> $GITHUB_STEP_SUMMARY
+          grep -E "^e:|error:|Error:|FAILURE|Unresolved reference|Cannot find|not found" build-debug.log | head -80 >> $GITHUB_STEP_SUMMARY || echo "No specific errors found" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Last 150 Lines of Build Log" >> $GITHUB_STEP_SUMMARY
+          echo "### Last 100 Lines" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          tail -150 build-debug.log >> $GITHUB_STEP_SUMMARY || true
+          tail -100 build-debug.log >> $GITHUB_STEP_SUMMARY || true
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Verify APK exists
@@ -162,10 +158,9 @@ jobs:
             exit 1
           fi
           APK_SIZE=$(stat -c%s "$APK_PATH")
-          echo "✅ Debug APK: $APK_PATH ($APK_SIZE bytes)"
-          echo "## ✅ Debug APK Built Successfully" >> $GITHUB_STEP_SUMMARY
-          echo "- Size: $(($APK_SIZE / 1024 / 1024)) MB" >> $GITHUB_STEP_SUMMARY
-          echo "- Path: $APK_PATH" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Debug APK: $APK_PATH ($(($APK_SIZE / 1024)) KB)"
+          echo "## ✅ Debug APK Built" >> $GITHUB_STEP_SUMMARY
+          echo "Size: $(($APK_SIZE / 1024 / 1024)) MB" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
@@ -207,30 +202,34 @@ jobs:
 
       - name: Restore cached keystore
         id: cache-keystore
+        continue-on-error: true
         uses: actions/cache@v4
         with:
           path: ~/.android/readzen-ci.keystore
           key: readzen-debug-keystore-v1
 
-      - name: Generate keystore (first run only)
-        if: steps.cache-keystore.outputs.cache-hit != 'true'
+      - name: Generate keystore if needed
         run: |
-          mkdir -p $HOME/.android
-          keytool -genkeypair \
-            -alias readzen-debug \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 36500 \
-            -keystore "$HOME/.android/readzen-ci.keystore" \
-            -storepass readzen2024 \
-            -keypass readzen2024 \
-            -dname "CN=ReadZen CI, OU=Development, O=ReadZen, L=Unknown, ST=Unknown, C=US"
-          echo "✅ New keystore generated (will be cached for future builds)"
+          if [ ! -f "$HOME/.android/readzen-ci.keystore" ]; then
+            echo "Keystore not found, generating..."
+            mkdir -p $HOME/.android
+            keytool -genkeypair \
+              -alias readzen-debug \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 36500 \
+              -keystore "$HOME/.android/readzen-ci.keystore" \
+              -storepass readzen2024 \
+              -keypass readzen2024 \
+              -dname "CN=ReadZen CI, OU=Development, O=ReadZen, L=Unknown, ST=Unknown, C=US"
+            echo "✅ New keystore generated"
+          else
+            echo "✅ Keystore restored from cache"
+          fi
 
       - name: Set keystore path
         run: |
           echo "CI_KEYSTORE_PATH=$HOME/.android/readzen-ci.keystore" >> $GITHUB_ENV
-          echo "✅ Using cached keystore for consistent APK signatures"
 
       - name: Setup Gradle
         id: setup_gradle
@@ -244,10 +243,8 @@ jobs:
         if: steps.setup_gradle.outcome == 'failure'
         run: |
           echo "⚠️ Gradle action failed, installing manually..."
-          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip || {
-            echo "Primary CDN failed, trying mirror..."
-            curl -sL "https://downloads.gradle-dn.com/distributions/gradle-8.5-bin.zip" -o gradle.zip
-          }
+          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip || \
+          curl -sL "https://downloads.gradle-dn.com/distributions/gradle-8.5-bin.zip" -o gradle.zip
           unzip -q gradle.zip -d /opt
           echo "/opt/gradle-8.5/bin" >> $GITHUB_PATH
           echo "✅ Gradle 8.5 installed manually"
@@ -261,9 +258,7 @@ jobs:
       - name: Build Release APK
         id: release_build
         working-directory: android
-        run: |
-          set -o pipefail
-          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build-release.log
+        run: ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build-release.log
         env:
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
           CI_KEYSTORE_PATH: ${{ env.CI_KEYSTORE_PATH }}
@@ -273,15 +268,12 @@ jobs:
         working-directory: android
         run: |
           echo "## 🔴 Release Build Failed" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Compilation Errors" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -E "^e:|error:|Error:|FAILURE|Unresolved reference|Cannot find|not found|Expecting|Overload resolution|None of the following|Type mismatch|Conflicting" build-release.log | head -80 >> $GITHUB_STEP_SUMMARY || echo "No specific error lines found" >> $GITHUB_STEP_SUMMARY
+          grep -E "^e:|error:|Error:|FAILURE|Unresolved reference|Cannot find|not found" build-release.log | head -80 >> $GITHUB_STEP_SUMMARY || echo "No specific errors found" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Last 150 Lines of Build Log" >> $GITHUB_STEP_SUMMARY
+          echo "### Last 100 Lines" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          tail -150 build-release.log >> $GITHUB_STEP_SUMMARY || true
+          tail -100 build-release.log >> $GITHUB_STEP_SUMMARY || true
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Verify APK exists
@@ -293,10 +285,9 @@ jobs:
             exit 1
           fi
           APK_SIZE=$(stat -c%s "$APK_PATH")
-          echo "✅ Release APK: $APK_PATH ($APK_SIZE bytes)"
-          echo "## ✅ Release APK Built Successfully" >> $GITHUB_STEP_SUMMARY
-          echo "- Size: $(($APK_SIZE / 1024 / 1024)) MB" >> $GITHUB_STEP_SUMMARY
-          echo "- Path: $APK_PATH" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Release APK: $APK_PATH ($(($APK_SIZE / 1024)) KB)"
+          echo "## ✅ Release APK Built" >> $GITHUB_STEP_SUMMARY
+          echo "Size: $(($APK_SIZE / 1024 / 1024)) MB" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
@@ -348,10 +339,8 @@ jobs:
         if: steps.setup_gradle.outcome == 'failure'
         run: |
           echo "⚠️ Gradle action failed, installing manually..."
-          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip || {
-            echo "Primary CDN failed, trying mirror..."
-            curl -sL "https://downloads.gradle-dn.com/distributions/gradle-8.5-bin.zip" -o gradle.zip
-          }
+          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip || \
+          curl -sL "https://downloads.gradle-dn.com/distributions/gradle-8.5-bin.zip" -o gradle.zip
           unzip -q gradle.zip -d /opt
           echo "/opt/gradle-8.5/bin" >> $GITHUB_PATH
           echo "✅ Gradle 8.5 installed manually"
