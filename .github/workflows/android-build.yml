@@ -1,8 +1,6 @@
 name: Android Build
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       build_type:
@@ -43,6 +41,10 @@ jobs:
           echo "Triggered by: $GH_ACTOR"
           echo "Event: $GH_EVENT"
           echo "Ref: $GH_REF"
+          if [[ "$GH_REF" != "refs/heads/main" ]]; then
+            echo "::error::Workflow can only run from main branch"
+            exit 1
+          fi
 
   build-debug:
     name: Build Debug APK
