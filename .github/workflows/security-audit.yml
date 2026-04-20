@@ -1,6 +1,5 @@
 name: Security Audit
 
-# SECURITY: Only on push to main (not PRs from forks)
 on:
   push:
     branches: [main]
@@ -12,6 +11,9 @@ concurrency:
   group: security-audit-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   audit-workflows:
     name: Audit Workflow Changes
@@ -19,7 +21,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -36,78 +38,58 @@ jobs:
           echo "Author: $GH_ACTOR"
           echo "Event: $GH_EVENT"
           echo ""
-
-          # Use github.event.before for full push range comparison
           if [ -n "$GH_BEFORE" ] && [ "$GH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
             CHANGED=$(git diff --name-only "$GH_BEFORE" "$GH_SHA" 2>/dev/null | grep '.github/' || true)
           else
             CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | grep '.github/' || true)
           fi
-
           if [ -n "$CHANGED" ]; then
-            echo "⚠️ CI/SECURITY FILES MODIFIED:"
+            echo "CI/SECURITY FILES MODIFIED:"
             echo "$CHANGED"
-            echo ""
             AUTHORIZED_USERS="readori"
             if echo "$AUTHORIZED_USERS" | grep -qw "$GH_ACTOR"; then
-              echo "✅ Author is authorized"
+              echo "Author is authorized"
             else
               echo "::error::UNAUTHORIZED modification by $GH_ACTOR"
               exit 1
             fi
           else
-            echo "✅ No CI/security file changes detected"
+            echo "No CI/security file changes detected"
           fi
 
       - name: Scan for hardcoded secrets
         run: |
           echo "Scanning for potential secret leaks..."
           FOUND=0
-          for f in .github/workflows/*.yml; do
+          for f in .github/workflows/*.yml .github/*.md .github/*.yml; do
+            [ -f "$f" ] || continue
             if grep -nPi '(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82}|sk-[a-zA-Z0-9]{48}|AKIA[A-Z0-9]{16}|glpat-[a-zA-Z0-9_-]{20}|xox[bprs]-[a-zA-Z0-9-]+|-----BEGIN .* KEY|cfat_[a-zA-Z0-9]+)' "$f" 2>/dev/null; then
               echo "::error file=$f::Potential hardcoded secret detected!"
               FOUND=1
             fi
           done
-          # Also scan non-workflow files in .github/
-          for f in .github/*.md .github/*.yml; do
-            [ -f "$f" ] || continue
-            if grep -nPi '(ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|AKIA[A-Z0-9]{16})' "$f" 2>/dev/null; then
-              echo "::error file=$f::Potential hardcoded secret in non-workflow file!"
-              FOUND=1
-            fi
-          done
           if [ "$FOUND" = "0" ]; then
-            echo "✅ No hardcoded secrets found"
+            echo "No hardcoded secrets found"
           else
             exit 1
           fi
 
       - name: Verify workflow security posture
         run: |
-          echo "Checking all workflows for security best practices..."
+          echo "Checking workflow security..."
           ISSUES=0
           for f in .github/workflows/*.yml; do
             echo "--- $f ---"
-            # Check permissions block
             if ! grep -q 'permissions:' "$f"; then
-              echo "::warning file=$f::Missing explicit permissions block"
+              echo "::warning file=$f::Missing explicit permissions"
               ISSUES=$((ISSUES+1))
             fi
-            # Check for dangerous triggers
             if grep -q 'pull_request_target' "$f"; then
-              echo "::error file=$f::DANGEROUS: pull_request_target trigger found!"
+              echo "::error file=$f::DANGEROUS pull_request_target trigger!"
               ISSUES=$((ISSUES+1))
             fi
-            # Check persist-credentials
             if grep -q 'actions/checkout' "$f" && ! grep -q 'persist-credentials: false' "$f"; then
               echo "::warning file=$f::checkout without persist-credentials: false"
             fi
           done
-          echo ""
-          echo "Security issues found: $ISSUES"
-          if [ "$ISSUES" -gt 0 ]; then
-            echo "::warning::$ISSUES security issues detected"
-          else
-            echo "✅ All workflows pass security checks"
-          fi
+          echo "Security issues: $ISSUES"
