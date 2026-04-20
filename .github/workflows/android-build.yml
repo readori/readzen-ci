@@ -70,12 +70,15 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: wrapper
+          gradle-version: '8.5'
           cache-disabled: true
 
-      - name: Grant Gradle wrapper permissions
+      - name: Generate Gradle Wrapper
         working-directory: android
-        run: chmod +x gradlew
+        run: |
+          gradle wrapper --gradle-version 8.5
+          chmod +x gradlew
+          echo "✅ Gradle wrapper generated"
 
       - name: Build Debug APK
         working-directory: android
@@ -95,7 +98,6 @@ jobs:
           fi
           APK_SIZE=$(stat -c%s "$APK_PATH")
           echo "✅ Debug APK: $APK_PATH ($APK_SIZE bytes)"
-          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v7
@@ -110,11 +112,10 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: build-failure-logs
+          name: debug-failure-logs
           path: |
             android/build-debug.log
             android/app/build/reports/
-            android/app/build/outputs/logs/
           retention-days: 1
 
   build-release:
@@ -139,12 +140,14 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: wrapper
+          gradle-version: '8.5'
           cache-disabled: true
 
-      - name: Grant Gradle wrapper permissions
+      - name: Generate Gradle Wrapper
         working-directory: android
-        run: chmod +x gradlew
+        run: |
+          gradle wrapper --gradle-version 8.5
+          chmod +x gradlew
 
       - name: Build Release APK
         working-directory: android
@@ -182,7 +185,6 @@ jobs:
           path: |
             android/build-release.log
             android/app/build/reports/
-            android/app/build/outputs/logs/
           retention-days: 1
 
   lint-android:
@@ -207,12 +209,14 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: wrapper
+          gradle-version: '8.5'
           cache-disabled: true
 
-      - name: Grant Gradle wrapper permissions
+      - name: Generate Gradle Wrapper
         working-directory: android
-        run: chmod +x gradlew
+        run: |
+          gradle wrapper --gradle-version 8.5
+          chmod +x gradlew
 
       - name: Run Android Lint
         working-directory: android

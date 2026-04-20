@@ -41,12 +41,14 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: wrapper
+          gradle-version: '8.5'
           cache-disabled: true
 
-      - name: Grant Gradle wrapper permissions
+      - name: Generate Gradle Wrapper
         working-directory: android
-        run: chmod +x gradlew
+        run: |
+          gradle wrapper --gradle-version 8.5
+          chmod +x gradlew
 
       - name: Build Release APK
         working-directory: android
