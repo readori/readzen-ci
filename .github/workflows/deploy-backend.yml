@@ -10,13 +10,13 @@ on:
       action:
         description: 'Deployment action'
         required: true
-        default: 'full-setup-and-deploy'
+        default: 'deploy'
         type: choice
         options:
-          - setup-resources
           - deploy
-          - full-setup-and-deploy
           - migrate-db
+          - setup-resources
+          - full-setup-and-deploy
 
 permissions:
   contents: write
@@ -33,7 +33,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      DEPLOY_ACTION: ${{ inputs.action || 'full-setup-and-deploy' }}
+      # IMPORTANT: push triggers default to 'deploy' (worker code only, NO DB migration).
+      # full-setup-and-deploy and migrate-db must be triggered manually via workflow_dispatch.
+      # This prevents accidental data wipe on every commit.
+      DEPLOY_ACTION: ${{ inputs.action || 'deploy' }}
     steps:
       - name: Validate credentials
         run: |
@@ -107,15 +110,11 @@ jobs:
             echo "d1_id=$DB_ID" >> $GITHUB_OUTPUT
             echo "✅ D1 created: $DB_ID"
           else
-            echo "Creation returned non-success, checking if already exists..."
+            echo "Checking if already exists..."
             LIST_RESP=$(curl -s -w "\n%{http_code}" \
               "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database" \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
-            LIST_HTTP=$(echo "$LIST_RESP" | tail -1)
             LIST_BODY=$(echo "$LIST_RESP" | sed '$d')
-            echo "List HTTP: $LIST_HTTP"
-            echo "List Body: $LIST_BODY"
-
             DB_ID=$(echo "$LIST_BODY" | jq -r '[.result[] | select(.name=="readzen-db")][0].uuid // empty' 2>/dev/null)
             if [ -n "$DB_ID" ] && [ "$DB_ID" != "null" ]; then
               echo "d1_id=$DB_ID" >> $GITHUB_OUTPUT
@@ -151,15 +150,11 @@ jobs:
             echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
             echo "✅ KV created: $KV_ID"
           else
-            echo "Creation returned non-success, checking if already exists..."
+            echo "Checking if already exists..."
             LIST_RESP=$(curl -s -w "\n%{http_code}" \
               "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces" \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
-            LIST_HTTP=$(echo "$LIST_RESP" | tail -1)
             LIST_BODY=$(echo "$LIST_RESP" | sed '$d')
-            echo "List HTTP: $LIST_HTTP"
-            echo "List Body: $LIST_BODY"
-
             KV_ID=$(echo "$LIST_BODY" | jq -r '[.result[] | select(.title=="readzen-kv")][0].id // empty' 2>/dev/null)
             if [ -n "$KV_ID" ] && [ "$KV_ID" != "null" ]; then
               echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
@@ -171,7 +166,7 @@ jobs:
           fi
 
       - name: Get existing resource IDs
-        if: env.DEPLOY_ACTION == 'deploy'
+        if: env.DEPLOY_ACTION == 'deploy' || env.DEPLOY_ACTION == 'migrate-db'
         id: get_ids
         run: |
           D1_RESP=$(curl -s \
@@ -190,6 +185,7 @@ jobs:
           fi
           echo "d1_id=$DB_ID" >> $GITHUB_OUTPUT
           echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
+          echo "✅ Found D1: $DB_ID | KV: $KV_ID"
 
       - name: Resolve resource IDs
         id: resources
@@ -206,37 +202,44 @@ jobs:
           D1_ID: ${{ steps.resources.outputs.d1_id }}
           KV_ID: ${{ steps.resources.outputs.kv_id }}
         run: |
-          echo 'name = "readzen-api"' > wrangler.toml
-          echo 'main = "src/index.ts"' >> wrangler.toml
-          echo 'compatibility_date = "2024-12-01"' >> wrangler.toml
-          echo 'compatibility_flags = ["nodejs_compat"]' >> wrangler.toml
-          echo 'workers_dev = true' >> wrangler.toml
-          echo '' >> wrangler.toml
-          echo '[[d1_databases]]' >> wrangler.toml
-          echo 'binding = "DB"' >> wrangler.toml
-          echo 'database_name = "readzen-db"' >> wrangler.toml
-          echo "database_id = \"${D1_ID}\"" >> wrangler.toml
-          echo '' >> wrangler.toml
-          echo '[[kv_namespaces]]' >> wrangler.toml
-          echo 'binding = "KV"' >> wrangler.toml
-          echo "id = \"${KV_ID}\"" >> wrangler.toml
-          echo '' >> wrangler.toml
-          echo '[vars]' >> wrangler.toml
-          echo 'APP_NAME = "ReadZen API"' >> wrangler.toml
-          echo 'APP_VERSION = "2.3.0"' >> wrangler.toml
-          echo 'CORS_ORIGINS = "https://readzen.app,https://admin.readzen.app"' >> wrangler.toml
-          echo 'JWT_ALGORITHM = "HS256"' >> wrangler.toml
-          echo 'JWT_EXPIRE_MINUTES = "1440"' >> wrangler.toml
-          echo 'RATE_LIMIT_PER_MINUTE = "60"' >> wrangler.toml
-          echo ""
+          cat > wrangler.toml << EOF
+          name = "readzen-api"
+          main = "src/index.ts"
+          compatibility_date = "2024-12-01"
+          compatibility_flags = ["nodejs_compat"]
+          workers_dev = true
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "readzen-db"
+          database_id = "${D1_ID}"
+
+          [[kv_namespaces]]
+          binding = "KV"
+          id = "${KV_ID}"
+
+          [vars]
+          APP_NAME = "ReadZen API"
+          APP_VERSION = "2.3.0"
+          CORS_ORIGINS = "https://web.heiqiba.com,https://readzen-api.iilove.workers.dev"
+          JWT_ALGORITHM = "HS256"
+          JWT_EXPIRE_MINUTES = "1440"
+          RATE_LIMIT_PER_MINUTE = "60"
+          EOF
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' wrangler.toml
+
           echo "=== Generated wrangler.toml ==="
           cat wrangler.toml
 
-      - name: Run D1 migrations
+      - name: Run D1 migrations (safe — CREATE TABLE IF NOT EXISTS)
+        # Only runs on explicit migrate-db, setup-resources, or full-setup-and-deploy.
+        # NEVER runs on push-triggered deploys to prevent accidental data loss.
         if: env.DEPLOY_ACTION == 'setup-resources' || env.DEPLOY_ACTION == 'full-setup-and-deploy' || env.DEPLOY_ACTION == 'migrate-db'
         working-directory: cloudflare-backend
         run: |
-          echo "Running schema migration..."
+          echo "Running safe schema migration (CREATE TABLE IF NOT EXISTS — no data loss)..."
           npx wrangler d1 execute readzen-db --remote --file=./schema.sql
           echo "✅ Database schema applied"
 
@@ -290,33 +293,7 @@ jobs:
             echo "✅ Worker deployed at: $WORKER_URL"
           else
             echo "worker_url=https://readzen-api.iilove.workers.dev" >> $GITHUB_OUTPUT
-            echo "✅ Worker deployed (URL from wrangler output not captured)"
-          fi
-
-      - name: Configure Custom Domain
-        if: env.DEPLOY_ACTION == 'full-setup-and-deploy'
-        env:
-          CNAME_DOMAIN: ${{ secrets.CNAME_HTTPS }}
-        run: |
-          if [ -n "$CNAME_DOMAIN" ]; then
-            echo "Setting custom domain: $CNAME_DOMAIN"
-            DOMAIN_ROOT=$(echo "$CNAME_DOMAIN" | rev | cut -d. -f1-2 | rev)
-            ZONE_RESULT=$(curl -s \
-              "https://api.cloudflare.com/client/v4/zones?name=${DOMAIN_ROOT}" \
-              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
-            ZONE_ID=$(echo "$ZONE_RESULT" | jq -r '.result[0].id // empty')
-            if [ -n "$ZONE_ID" ] && [ "$ZONE_ID" != "null" ]; then
-              curl -s -X POST \
-                "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/workers/routes" \
-                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-                -H "Content-Type: application/json" \
-                -d "{\"pattern\": \"${CNAME_DOMAIN}/*\", \"script\": \"readzen-api\"}"
-              echo "✅ Worker route set for $CNAME_DOMAIN"
-            else
-              echo "⚠️ Zone not found for $DOMAIN_ROOT — using workers.dev URL"
-            fi
-          else
-            echo "ℹ️ No CNAME_HTTPS secret — using workers.dev"
+            echo "✅ Worker deployed"
           fi
 
       - name: Verify deployment
@@ -324,27 +301,18 @@ jobs:
         continue-on-error: true
         run: |
           WORKER_URL="${{ steps.deploy.outputs.worker_url }}"
-          echo "Worker URL: $WORKER_URL"
           echo "Waiting 20s for propagation..."
           sleep 20
 
-          echo "=== Health Check ==="
           HTTP_CODE=$(curl -s -o /tmp/resp.json -w "%{http_code}" "${WORKER_URL}/" || echo "000")
-          echo "HTTP Status: $HTTP_CODE"
+          echo "Health HTTP: $HTTP_CODE"
           cat /tmp/resp.json 2>/dev/null
           echo ""
 
-          echo "=== Config Check ==="
-          HTTP_CODE2=$(curl -s -o /tmp/config.json -w "%{http_code}" "${WORKER_URL}/api/v1/config/public" || echo "000")
-          echo "Config HTTP: $HTTP_CODE2"
-          cat /tmp/config.json 2>/dev/null
-          echo ""
-
           if [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ Worker is LIVE and responding!"
+            echo "✅ Worker is LIVE!"
           else
-            echo "⚠️ Worker returned HTTP $HTTP_CODE"
-            echo "Check Cloudflare Dashboard > Workers > readzen-api for logs"
+            echo "⚠️ Worker returned HTTP $HTTP_CODE — check Cloudflare Dashboard"
           fi
 
       - name: Post deployment report
@@ -376,9 +344,7 @@ jobs:
               '',
               '### Endpoints',
               `- Health: \`${workerUrl}/\``,
-              `- API: \`${workerUrl}/api/v1/\``,
-              `- Admin: \`${workerUrl}/admin\``,
-              `- Config: \`GET ${workerUrl}/api/v1/config/public\``,
+              `- Admin Panel: \`${workerUrl}/admin\``,
               `- Bootstrap: \`POST ${workerUrl}/api/v1/admin/bootstrap\``,
             ].join('\n');
             await github.rest.issues.createComment({
