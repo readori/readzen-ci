@@ -1,1 +1,1 @@
-v11 - verify keystore persistence (CI_KEYSTORE_BASE64 secret)
+v12 — verify persistent keystore build
