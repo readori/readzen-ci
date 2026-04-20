@@ -13,6 +13,8 @@ on:
           - release
   repository_dispatch:
     types: [source-updated]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -64,21 +66,20 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: '8.5'
+          gradle-version: wrapper
           cache-disabled: true
 
       - name: Grant Gradle wrapper permissions
         working-directory: android
-        run: chmod +x gradlew || true
+        run: chmod +x gradlew
 
       - name: Build Debug APK
         working-directory: android
-        run: gradle assembleDebug --no-daemon --stacktrace 2>&1 | tail -200
+        run: ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tail -200
         env:
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
 
@@ -119,17 +120,20 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: '8.5'
+          gradle-version: wrapper
           cache-disabled: true
+
+      - name: Grant Gradle wrapper permissions
+        working-directory: android
+        run: chmod +x gradlew
 
       - name: Run Android Lint
         working-directory: android
-        run: gradle lint --no-daemon || true
+        run: ./gradlew lint --no-daemon || true
 
       - name: Upload Lint Report
         if: always()
