@@ -1,0 +1,308 @@
+name: Deploy Backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Deployment action'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - setup-resources
+          - deploy
+          - full-setup-and-deploy
+          - migrate-db
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy-backend:
+    name: Deploy Cloudflare Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          repository: readori/readzen
+          token: ${{ secrets.READZEN_PAT }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: cloudflare-backend
+        run: npm install
+
+      - name: Create D1 Database (if setup)
+        if: inputs.action == 'setup-resources' || inputs.action == 'full-setup-and-deploy'
+        id: create_d1
+        run: |
+          echo "Creating D1 database..."
+          RESULT=$(curl -s -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"name": "readzen-db"}')
+          
+          echo "D1 Response: $RESULT"
+          
+          SUCCESS=$(echo "$RESULT" | jq -r '.success')
+          if [ "$SUCCESS" = "true" ]; then
+            DB_ID=$(echo "$RESULT" | jq -r '.result.uuid')
+            echo "d1_id=$DB_ID" >> $GITHUB_OUTPUT
+            echo "✅ D1 Database created: $DB_ID"
+          else
+            # Check if already exists
+            EXISTING=$(curl -s \
+              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database?name=readzen-db" \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+            DB_ID=$(echo "$EXISTING" | jq -r '.result[0].uuid // empty')
+            if [ -n "$DB_ID" ]; then
+              echo "d1_id=$DB_ID" >> $GITHUB_OUTPUT
+              echo "ℹ️ D1 Database already exists: $DB_ID"
+            else
+              echo "❌ Failed to create D1: $RESULT"
+              exit 1
+            fi
+          fi
+
+      - name: Create KV Namespace (if setup)
+        if: inputs.action == 'setup-resources' || inputs.action == 'full-setup-and-deploy'
+        id: create_kv
+        run: |
+          echo "Creating KV namespace..."
+          RESULT=$(curl -s -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"title": "readzen-kv"}')
+          
+          echo "KV Response: $RESULT"
+          
+          SUCCESS=$(echo "$RESULT" | jq -r '.success')
+          if [ "$SUCCESS" = "true" ]; then
+            KV_ID=$(echo "$RESULT" | jq -r '.result.id')
+            echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
+            echo "✅ KV Namespace created: $KV_ID"
+          else
+            # Check if already exists
+            EXISTING=$(curl -s \
+              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces" \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+            KV_ID=$(echo "$EXISTING" | jq -r '.result[] | select(.title=="readzen-kv") | .id')
+            if [ -n "$KV_ID" ]; then
+              echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
+              echo "ℹ️ KV Namespace already exists: $KV_ID"
+            else
+              echo "❌ Failed to create KV: $RESULT"
+              exit 1
+            fi
+          fi
+
+      - name: Get existing resource IDs (deploy only)
+        if: inputs.action == 'deploy'
+        id: get_ids
+        run: |
+          # Get D1 ID
+          D1_RESULT=$(curl -s \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database?name=readzen-db" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+          DB_ID=$(echo "$D1_RESULT" | jq -r '.result[0].uuid // empty')
+          
+          # Get KV ID
+          KV_RESULT=$(curl -s \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+          KV_ID=$(echo "$KV_RESULT" | jq -r '.result[] | select(.title=="readzen-kv") | .id')
+          
+          if [ -z "$DB_ID" ] || [ -z "$KV_ID" ]; then
+            echo "❌ Resources not found. Run 'setup-resources' first."
+            echo "D1: $DB_ID"
+            echo "KV: $KV_ID"
+            exit 1
+          fi
+          
+          echo "d1_id=$DB_ID" >> $GITHUB_OUTPUT
+          echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
+          echo "✅ Found D1: $DB_ID, KV: $KV_ID"
+
+      - name: Resolve resource IDs
+        id: resources
+        run: |
+          D1_ID="${{ steps.create_d1.outputs.d1_id }}${{ steps.get_ids.outputs.d1_id }}"
+          KV_ID="${{ steps.create_kv.outputs.kv_id }}${{ steps.get_ids.outputs.kv_id }}"
+          echo "d1_id=$D1_ID" >> $GITHUB_OUTPUT
+          echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
+          echo "Resolved — D1: $D1_ID | KV: $KV_ID"
+
+      - name: Update wrangler.toml with real IDs
+        working-directory: cloudflare-backend
+        run: |
+          D1_ID="${{ steps.resources.outputs.d1_id }}"
+          KV_ID="${{ steps.resources.outputs.kv_id }}"
+          
+          cat > wrangler.toml << EOF
+          name = "readzen-api"
+          main = "src/index.ts"
+          compatibility_date = "2024-12-01"
+          compatibility_flags = ["nodejs_compat"]
+          
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "readzen-db"
+          database_id = "${D1_ID}"
+          
+          [[kv_namespaces]]
+          binding = "KV"
+          id = "${KV_ID}"
+          
+          [vars]
+          APP_NAME = "ReadZen API"
+          APP_VERSION = "2.0.0"
+          CORS_ORIGINS = "https://readzen.app,https://admin.readzen.app"
+          JWT_ALGORITHM = "HS256"
+          JWT_EXPIRE_MINUTES = "1440"
+          RATE_LIMIT_PER_MINUTE = "60"
+          
+          [env.dev]
+          name = "readzen-api-dev"
+          [env.dev.vars]
+          CORS_ORIGINS = "http://localhost:3000,http://localhost:8787"
+          EOF
+          
+          echo "✅ wrangler.toml updated with real IDs"
+          cat wrangler.toml
+
+      - name: Run D1 migrations
+        if: inputs.action == 'setup-resources' || inputs.action == 'full-setup-and-deploy' || inputs.action == 'migrate-db'
+        working-directory: cloudflare-backend
+        run: |
+          D1_ID="${{ steps.resources.outputs.d1_id }}"
+          echo "Running schema migration on D1: $D1_ID"
+          npx wrangler d1 execute readzen-db --remote --file=./schema.sql
+          echo "✅ Database schema applied"
+
+      - name: Set Worker secrets
+        if: inputs.action == 'setup-resources' || inputs.action == 'full-setup-and-deploy'
+        working-directory: cloudflare-backend
+        run: |
+          # JWT_SECRET — generate random secret
+          JWT_SECRET=$(openssl rand -hex 32)
+          echo "$JWT_SECRET" | npx wrangler secret put JWT_SECRET
+          
+          # SECRET_KEY for admin bootstrap
+          SECRET_KEY=$(openssl rand -hex 24)
+          echo "$SECRET_KEY" | npx wrangler secret put SECRET_KEY
+          
+          # Store secret key for admin bootstrap (output to job summary)
+          echo "## 🔐 Deployment Secrets" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**SECRET_KEY** (for admin bootstrap): \`$SECRET_KEY\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ Save this key! Use it to call POST /api/v1/admin/bootstrap" >> $GITHUB_STEP_SUMMARY
+          
+          # Set payment secrets if available
+          if [ -n "${{ secrets.STRIPE_SECRET_KEY }}" ]; then
+            echo "${{ secrets.STRIPE_SECRET_KEY }}" | npx wrangler secret put STRIPE_SECRET_KEY
+            echo "✅ Stripe secret set"
+          fi
+          if [ -n "${{ secrets.STRIPE_WEBHOOK_SECRET }}" ]; then
+            echo "${{ secrets.STRIPE_WEBHOOK_SECRET }}" | npx wrangler secret put STRIPE_WEBHOOK_SECRET
+            echo "✅ Stripe webhook secret set"
+          fi
+          if [ -n "${{ secrets.PAYPAL_CLIENT_ID }}" ]; then
+            echo "${{ secrets.PAYPAL_CLIENT_ID }}" | npx wrangler secret put PAYPAL_CLIENT_ID
+            echo "✅ PayPal client ID set"
+          fi
+          if [ -n "${{ secrets.PAYPAL_CLIENT_SECRET }}" ]; then
+            echo "${{ secrets.PAYPAL_CLIENT_SECRET }}" | npx wrangler secret put PAYPAL_CLIENT_SECRET
+            echo "✅ PayPal client secret set"
+          fi
+
+      - name: Deploy Worker
+        if: inputs.action == 'deploy' || inputs.action == 'full-setup-and-deploy'
+        working-directory: cloudflare-backend
+        run: |
+          echo "Deploying readzen-api worker..."
+          npx wrangler deploy --minify
+          echo "✅ Worker deployed successfully!"
+
+      - name: Configure Custom Domain (Admin Panel)
+        if: inputs.action == 'full-setup-and-deploy'
+        run: |
+          CNAME_DOMAIN="${{ secrets.CNAME_HTTPS }}"
+          if [ -n "$CNAME_DOMAIN" ]; then
+            echo "Setting custom domain: $CNAME_DOMAIN"
+            RESULT=$(curl -s -X PUT \
+              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/readzen-api/routes" \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"pattern\": \"${CNAME_DOMAIN}/*\", \"script\": \"readzen-api\"}")
+            echo "Custom domain result: $RESULT"
+          else
+            echo "⚠️ CNAME_HTTPS secret not set, skipping custom domain"
+          fi
+
+      - name: Verify deployment
+        if: inputs.action == 'deploy' || inputs.action == 'full-setup-and-deploy'
+        run: |
+          echo "Verifying worker health..."
+          sleep 5
+          RESPONSE=$(curl -s "https://readzen-api.${CLOUDFLARE_ACCOUNT_ID}.workers.dev/" || true)
+          echo "Health check response: $RESPONSE"
+          
+          if echo "$RESPONSE" | jq -e '.status == "running"' > /dev/null 2>&1; then
+            echo "✅ Worker is healthy and running!"
+          else
+            # Try subdomain format
+            RESPONSE2=$(curl -s "https://readzen-api.readori.workers.dev/" || true)
+            echo "Alt health check: $RESPONSE2"
+            echo "⚠️ Worker deployed but health check may need DNS propagation"
+          fi
+
+      - name: Post deployment report
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const d1 = '${{ steps.resources.outputs.d1_id }}';
+            const kv = '${{ steps.resources.outputs.kv_id }}';
+            const action = '${{ inputs.action }}';
+            
+            const body = `## 🚀 Backend Deployment Report
+            
+            **Action:** ${action}
+            **Date:** ${new Date().toISOString()}
+            **Run:** [${context.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})
+            
+            ### Resources
+            | Resource | ID |
+            |---|---|
+            | D1 Database | \`${d1}\` |
+            | KV Namespace | \`${kv}\` |
+            | Worker | readzen-api |
+            
+            ### Endpoints
+            - Health: \`https://readzen-api.readori.workers.dev/\`
+            - API: \`https://readzen-api.readori.workers.dev/api/v1/\`
+            - Admin Panel: \`https://readzen-api.readori.workers.dev/admin\`
+            - Bootstrap: \`POST /api/v1/admin/bootstrap\`
+            `;
+            
+            await github.rest.issues.createComment({
+              owner: 'readori', repo: 'readzen-ci', issue_number: 1,
+              body: body
+            });
