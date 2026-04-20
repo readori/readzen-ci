@@ -1,3 +1,1 @@
-v9-version-update
-timestamp: 2026-04-20T14:33
-changes: Deploy with APP_VERSION 2.1.0 in wrangler.toml, verify worker URL fallback
+v3 — redeploy: admin panel inline CSS fix (no CDN dependency)
