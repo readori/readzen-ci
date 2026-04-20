@@ -67,6 +67,24 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Generate consistent keystore
+        run: |
+          mkdir -p $HOME/.android
+          KEYSTORE_PATH="$HOME/.android/readzen-ci.keystore"
+          if [ ! -f "$KEYSTORE_PATH" ]; then
+            keytool -genkeypair \
+              -alias readzen-debug \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 36500 \
+              -keystore "$KEYSTORE_PATH" \
+              -storepass readzen2024 \
+              -keypass readzen2024 \
+              -dname "CN=ReadZen CI, OU=Development, O=ReadZen, L=Unknown, ST=Unknown, C=US"
+          fi
+          echo "CI_KEYSTORE_PATH=$KEYSTORE_PATH" >> $GITHUB_ENV
+          echo "✅ Consistent keystore ready at $KEYSTORE_PATH"
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -88,6 +106,7 @@ jobs:
           ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build-debug.log
         env:
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+          CI_KEYSTORE_PATH: ${{ env.CI_KEYSTORE_PATH }}
 
       - name: Extract build errors on failure
         if: failure() && steps.debug_build.outcome == 'failure'
@@ -115,6 +134,9 @@ jobs:
           fi
           APK_SIZE=$(stat -c%s "$APK_PATH")
           echo "✅ Debug APK: $APK_PATH ($APK_SIZE bytes)"
+          echo "## ✅ Debug APK Built Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "- Size: $(($APK_SIZE / 1024 / 1024)) MB" >> $GITHUB_STEP_SUMMARY
+          echo "- Path: $APK_PATH" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v7
@@ -122,7 +144,7 @@ jobs:
         with:
           name: readzen-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
-          retention-days: 3
+          retention-days: 7
           overwrite: true
 
       - name: Upload build logs on failure
@@ -154,6 +176,22 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Generate consistent keystore
+        run: |
+          mkdir -p $HOME/.android
+          KEYSTORE_PATH="$HOME/.android/readzen-ci.keystore"
+          keytool -genkeypair \
+            -alias readzen-debug \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 36500 \
+            -keystore "$KEYSTORE_PATH" \
+            -storepass readzen2024 \
+            -keypass readzen2024 \
+            -dname "CN=ReadZen CI, OU=Development, O=ReadZen, L=Unknown, ST=Unknown, C=US"
+          echo "CI_KEYSTORE_PATH=$KEYSTORE_PATH" >> $GITHUB_ENV
+          echo "✅ Consistent keystore ready"
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -174,6 +212,7 @@ jobs:
           ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build-release.log
         env:
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+          CI_KEYSTORE_PATH: ${{ env.CI_KEYSTORE_PATH }}
 
       - name: Extract build errors on failure
         if: failure() && steps.release_build.outcome == 'failure'
@@ -201,6 +240,9 @@ jobs:
           fi
           APK_SIZE=$(stat -c%s "$APK_PATH")
           echo "✅ Release APK: $APK_PATH ($APK_SIZE bytes)"
+          echo "## ✅ Release APK Built Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "- Size: $(($APK_SIZE / 1024 / 1024)) MB" >> $GITHUB_STEP_SUMMARY
+          echo "- Path: $APK_PATH" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v7
