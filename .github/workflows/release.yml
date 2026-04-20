@@ -1,9 +1,6 @@
 name: Release Build
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version:
@@ -15,7 +12,11 @@ jobs:
     name: Build Release APK
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout source from readzen
+        uses: actions/checkout@v4
+        with:
+          repository: readori/readzen
+          token: ${{ secrets.READZEN_PAT }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -38,29 +39,27 @@ jobs:
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: readzen-release-${{ github.ref_name || github.event.inputs.version }}
-          path: |
-            android/app/build/outputs/apk/release/*.apk
+          name: readzen-release-${{ github.event.inputs.version }}
+          path: android/app/build/outputs/apk/release/*.apk
           retention-days: 90
 
-  docker-build:
-    name: Build Docker Image
+  cloudflare-test:
+    name: TypeScript Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Build Docker image
-        run: |
-          cd backend
-          docker build -t readzen-api:${{ github.ref_name || 'latest' }} .
-
-      - name: Save Docker image
-        run: |
-          docker save readzen-api:${{ github.ref_name || 'latest' }} | gzip > readzen-api.tar.gz
-
-      - name: Upload Docker image
-        uses: actions/upload-artifact@v4
+      - name: Checkout source from readzen
+        uses: actions/checkout@v4
         with:
-          name: docker-image-${{ github.ref_name || 'latest' }}
-          path: readzen-api.tar.gz
-          retention-days: 30
+          repository: readori/readzen
+          token: ${{ secrets.READZEN_PAT }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install & Type Check
+        working-directory: cloudflare-backend
+        run: |
+          npm install
+          npx tsc --noEmit

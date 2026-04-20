@@ -1,32 +1,36 @@
-# ReadZen CI/CD Build Pipeline
+# ReadZen CI
 
-Public repository for Android APK compilation & backend testing.  
-Avoids GitHub Actions private repository CI minutes limitations.
+Public CI/CD pipeline for [ReadZen](https://github.com/readori/readzen) — rideshare driver assistant app.
+
+Uses public repo CI minutes to build, test, and deploy from the private `readori/readzen` repository.
 
 ## Workflows
 
-| Workflow | Trigger | Purpose |
-|----------|---------|--------|
-| `android-build.yml` | Push to main, PR | Build debug/release APK |
-| `backend-test.yml` | Push to main, PR | Run Python tests + lint |
-| `release.yml` | Tag `v*` | Build release APK + upload artifacts |
+| Workflow | Trigger | Description |
+|----------|---------|-------------|
+| **Android Build** | Manual / Dispatch | Builds debug APK + runs lint |
+| **Backend Tests** | Manual / Dispatch | Python tests with Postgres + Redis |
+| **Cloudflare Deploy** | Manual / Dispatch | Deploys Workers backend |
+| **Cloudflare Setup** | Manual (provision/init-schema/status) | Creates D1 + KV resources |
+| **Release Build** | Manual | Release APK + TypeScript check |
 
-## Usage
+## Required Secrets
 
-1. Push/sync source code from private `readzen` repo
-2. CI workflows run automatically
-3. APK artifacts available under Actions → Artifacts
+| Secret | Description |
+|--------|-------------|
+| `READZEN_PAT` | **Required** — GitHub PAT with `repo` scope for `readori/readzen` |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API Token |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID |
+| `MAPS_API_KEY` | Google Maps API key (optional, for Android builds) |
 
-## Manual Build
+## Setup
 
-```bash
-# Android
-cd android && ./gradlew assembleDebug
-
-# Backend tests
-cd backend && pip install -r requirements.txt && python -m pytest tests/ -v
-```
-
-## Source Repository
-
-Main development: [readori/readzen](https://github.com/readori/readzen) (private)
+1. Create a **fine-grained GitHub PAT** at https://github.com/settings/tokens?type=beta
+   - Resource: `readori/readzen`
+   - Permissions: `Contents: Read`
+2. Add as `READZEN_PAT` secret in this repo's Settings → Secrets
+3. Add Cloudflare secrets
+4. Run **Cloudflare Infrastructure Setup** → `provision`
+5. Update `wrangler.toml` with the D1/KV IDs
+6. Run **Cloudflare Infrastructure Setup** → `init-schema`
+7. Run **Cloudflare Deploy**

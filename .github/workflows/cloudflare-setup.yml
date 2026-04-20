@@ -21,7 +21,11 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout source from readzen
+        uses: actions/checkout@v4
+        with:
+          repository: readori/readzen
+          token: ${{ secrets.READZEN_PAT }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -99,10 +103,8 @@ jobs:
           echo "D1 Database ID: ${{ steps.d1.outputs.d1_id }}"
           echo "KV Namespace ID: ${{ steps.kv.outputs.kv_id }}"
           echo ""
-          echo "Next steps:"
-          echo "1. Copy the IDs above"
-          echo "2. I'll update wrangler.toml for you"
-          echo "3. Then run this workflow again with 'init-schema'"
+          echo "Next: update cloudflare-backend/wrangler.toml with these IDs"
+          echo "Then run this workflow again with 'init-schema'"
           echo "============================================"
 
       - name: Initialize D1 Schema

@@ -1,11 +1,9 @@
 name: Backend Tests
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+  repository_dispatch:
+    types: [source-updated]
 
 jobs:
   test:
@@ -31,7 +29,11 @@ jobs:
           - 6379:6379
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout source from readzen
+        uses: actions/checkout@v4
+        with:
+          repository: readori/readzen
+          token: ${{ secrets.READZEN_PAT }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -60,7 +62,11 @@ jobs:
     name: Python Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout source from readzen
+        uses: actions/checkout@v4
+        with:
+          repository: readori/readzen
+          token: ${{ secrets.READZEN_PAT }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5

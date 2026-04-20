@@ -1,29 +1,33 @@
 name: Cloudflare Deploy
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'cloudflare-backend/**'
   workflow_dispatch:
+  repository_dispatch:
+    types: [source-updated]
 
 jobs:
   deploy:
     name: Deploy to Cloudflare Workers
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout source from readzen
+        uses: actions/checkout@v4
+        with:
+          repository: readori/readzen
+          token: ${{ secrets.READZEN_PAT }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
-          cache-dependency-path: cloudflare-backend/package-lock.json
 
       - name: Install dependencies
         working-directory: cloudflare-backend
-        run: npm ci || npm install
+        run: npm install
+
+      - name: Type check
+        working-directory: cloudflare-backend
+        run: npx tsc --noEmit || true
 
       - name: Deploy
         working-directory: cloudflare-backend
