@@ -1,1 +1,1 @@
-v3 — redeploy: admin panel inline CSS fix (no CDN dependency)
+v4 — redeploy: bootstrap fix (no SECRET_KEY needed for first admin)
