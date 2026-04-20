@@ -1,0 +1,115 @@
+name: Cloudflare Infrastructure Setup
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'provision'
+        type: choice
+        options:
+          - provision
+          - init-schema
+          - status
+
+jobs:
+  setup:
+    name: Provision Cloudflare Resources
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wrangler
+        run: npm install -g wrangler@latest
+
+      - name: Verify Auth
+        run: |
+          echo "Verifying Cloudflare authentication..."
+          wrangler whoami
+          echo "✅ Auth OK"
+
+      - name: List Existing Resources
+        if: inputs.action == 'status'
+        run: |
+          echo "=== D1 Databases ==="
+          wrangler d1 list || echo "No D1 databases found"
+          echo ""
+          echo "=== KV Namespaces ==="
+          wrangler kv namespace list || echo "No KV namespaces found"
+
+      - name: Create D1 Database
+        if: inputs.action == 'provision'
+        id: d1
+        run: |
+          echo "Creating D1 database 'readzen-db'..."
+          OUTPUT=$(wrangler d1 create readzen-db 2>&1) || {
+            echo "$OUTPUT"
+            if echo "$OUTPUT" | grep -qi "already exists"; then
+              echo "⚠️ D1 database already exists, listing..."
+              wrangler d1 list
+              exit 0
+            fi
+            exit 1
+          }
+          echo "$OUTPUT"
+          D1_ID=$(echo "$OUTPUT" | grep -oP 'database_id\s*=\s*"\K[^"]+' || echo "")
+          if [ -z "$D1_ID" ]; then
+            D1_ID=$(echo "$OUTPUT" | grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+          fi
+          echo "d1_id=$D1_ID" >> $GITHUB_OUTPUT
+          echo "✅ D1 Database ID: $D1_ID"
+
+      - name: Create KV Namespace
+        if: inputs.action == 'provision'
+        id: kv
+        run: |
+          echo "Creating KV namespace 'READZEN_KV'..."
+          OUTPUT=$(wrangler kv namespace create READZEN_KV 2>&1) || {
+            echo "$OUTPUT"
+            if echo "$OUTPUT" | grep -qi "already exists"; then
+              echo "⚠️ KV namespace already exists, listing..."
+              wrangler kv namespace list
+              exit 0
+            fi
+            exit 1
+          }
+          echo "$OUTPUT"
+          KV_ID=$(echo "$OUTPUT" | grep -oP 'id\s*=\s*"\K[^"]+' || echo "")
+          if [ -z "$KV_ID" ]; then
+            KV_ID=$(echo "$OUTPUT" | grep -oP '[0-9a-f]{32}' | head -1)
+          fi
+          echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
+          echo "✅ KV Namespace ID: $KV_ID"
+
+      - name: Output Summary
+        if: inputs.action == 'provision'
+        run: |
+          echo "============================================"
+          echo "🎉 Cloudflare Resources Created!"
+          echo "============================================"
+          echo "D1 Database ID: ${{ steps.d1.outputs.d1_id }}"
+          echo "KV Namespace ID: ${{ steps.kv.outputs.kv_id }}"
+          echo ""
+          echo "Next steps:"
+          echo "1. Copy the IDs above"
+          echo "2. I'll update wrangler.toml for you"
+          echo "3. Then run this workflow again with 'init-schema'"
+          echo "============================================"
+
+      - name: Initialize D1 Schema
+        if: inputs.action == 'init-schema'
+        working-directory: cloudflare-backend
+        run: |
+          npm install
+          echo "Running D1 schema migration..."
+          npx wrangler d1 execute readzen-db --file=schema.sql --remote
+          echo "✅ D1 schema initialized"
