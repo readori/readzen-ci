@@ -37,7 +37,7 @@ jobs:
     name: Provision & Deploy to Cloudflare Workers
     needs: verify-caller
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -50,9 +50,9 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Provision D1 Database via API
         id: d1
@@ -63,6 +63,7 @@ jobs:
             | jq -r '.result[] | select(.name=="readzen-db") | .uuid')
           if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
             D1_ID="$EXISTING"
+            echo "Found existing D1: $D1_ID"
           else
             RESP=$(curl -sf -X POST \
               -H "Authorization: Bearer $CF_API_TOKEN" \
@@ -70,6 +71,7 @@ jobs:
               -d '{"name":"readzen-db"}' \
               "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/d1/database")
             D1_ID=$(echo "$RESP" | jq -r '.result.uuid')
+            echo "Created D1: $D1_ID"
           fi
           if [ -z "$D1_ID" ] || [ "$D1_ID" = "null" ]; then
             echo "::error::Failed to get D1 database ID"
@@ -87,6 +89,7 @@ jobs:
             | jq -r '.result[] | select(.title=="READZEN_KV") | .id')
           if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
             KV_ID="$EXISTING"
+            echo "Found existing KV: $KV_ID"
           else
             RESP=$(curl -sf -X POST \
               -H "Authorization: Bearer $CF_API_TOKEN" \
@@ -94,6 +97,7 @@ jobs:
               -d '{"title":"READZEN_KV"}' \
               "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/storage/kv/namespaces")
             KV_ID=$(echo "$RESP" | jq -r '.result.id')
+            echo "Created KV: $KV_ID"
           fi
           if [ -z "$KV_ID" ] || [ "$KV_ID" = "null" ]; then
             echo "::error::Failed to get KV namespace ID"
@@ -106,10 +110,23 @@ jobs:
         env:
           D1_ID: ${{ steps.d1.outputs.d1_id }}
           KV_ID: ${{ steps.kv.outputs.kv_id }}
+          CNAME_DOMAIN: ${{ secrets.CNAME_HTTPS }}
         run: |
           cd cloudflare-backend
           sed -i "s/YOUR_D1_DATABASE_ID/$D1_ID/g" wrangler.toml
           sed -i "s/YOUR_KV_NAMESPACE_ID/$KV_ID/g" wrangler.toml
+          # Add custom domain if CNAME_HTTPS secret is set
+          if [ -n "$CNAME_DOMAIN" ]; then
+            cat >> wrangler.toml <<EOF
+
+[routes]
+pattern = "$CNAME_DOMAIN/*"
+custom_domain = true
+EOF
+            echo "✅ Custom domain configured: $CNAME_DOMAIN"
+          fi
+          echo "--- wrangler.toml (sanitized) ---"
+          cat wrangler.toml | sed 's/database_id = ".*"/database_id = "***"/g' | sed 's/id = ".*"/id = "***"/g'
 
       - name: Install dependencies
         working-directory: cloudflare-backend
@@ -117,7 +134,7 @@ jobs:
 
       - name: Type check
         working-directory: cloudflare-backend
-        run: npx tsc --noEmit 2>&1 || echo "Type check warnings"
+        run: npx tsc --noEmit 2>&1 || echo "::warning::TypeScript check had warnings"
 
       - name: Deploy Worker
         working-directory: cloudflare-backend
@@ -140,7 +157,12 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           JWT_SECRET_VAL: ${{ secrets.JWT_SECRET }}
           SECRET_KEY_VAL: ${{ secrets.SECRET_KEY }}
+          STRIPE_KEY_VAL: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WH_VAL: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          PAYPAL_ID_VAL: ${{ secrets.PAYPAL_CLIENT_ID }}
+          PAYPAL_SECRET_VAL: ${{ secrets.PAYPAL_CLIENT_SECRET }}
         run: |
+          # Core secrets
           if [ -n "$JWT_SECRET_VAL" ]; then
             echo "$JWT_SECRET_VAL" | npx wrangler secret put JWT_SECRET 2>&1
           else
@@ -151,10 +173,47 @@ jobs:
           else
             openssl rand -hex 32 | npx wrangler secret put SECRET_KEY 2>&1
           fi
+          # Payment secrets (optional)
+          if [ -n "$STRIPE_KEY_VAL" ]; then
+            echo "$STRIPE_KEY_VAL" | npx wrangler secret put STRIPE_SECRET_KEY 2>&1
+            echo "✅ Stripe secret configured"
+          fi
+          if [ -n "$STRIPE_WH_VAL" ]; then
+            echo "$STRIPE_WH_VAL" | npx wrangler secret put STRIPE_WEBHOOK_SECRET 2>&1
+          fi
+          if [ -n "$PAYPAL_ID_VAL" ]; then
+            echo "$PAYPAL_ID_VAL" | npx wrangler secret put PAYPAL_CLIENT_ID 2>&1
+            echo "✅ PayPal ID configured"
+          fi
+          if [ -n "$PAYPAL_SECRET_VAL" ]; then
+            echo "$PAYPAL_SECRET_VAL" | npx wrangler secret put PAYPAL_CLIENT_SECRET 2>&1
+          fi
+
+      - name: Setup Custom Domain
+        if: ${{ secrets.CNAME_HTTPS != '' }}
+        env:
+          CNAME_DOMAIN: ${{ secrets.CNAME_HTTPS }}
+        run: |
+          echo "Custom domain: $CNAME_DOMAIN"
+          # Verify worker is accessible via custom domain
+          sleep 5
+          HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' "https://$CNAME_DOMAIN/" 2>/dev/null || echo "000")
+          echo "Custom domain response: $HTTP_CODE"
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Custom domain is live: https://$CNAME_DOMAIN"
+          else
+            echo "::warning::Custom domain may need DNS configuration: $CNAME_DOMAIN"
+            echo "Point CNAME to readzen-api.readori.workers.dev"
+          fi
 
       - name: Verify Deployment
         run: |
           sleep 8
           HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' "https://readzen-api.readori.workers.dev/" 2>/dev/null || echo "000")
-          if [ "$HTTP_CODE" = "200" ]; then echo "Worker is live"
-          else echo "Worker returned $HTTP_CODE"; fi
+          RESP=$(curl -sf "https://readzen-api.readori.workers.dev/" 2>/dev/null || echo "{}")
+          echo "Worker response ($HTTP_CODE): $RESP"
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Worker is live and healthy"
+          else
+            echo "::warning::Worker returned HTTP $HTTP_CODE"
+          fi
