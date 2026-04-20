@@ -1,7 +1,6 @@
 name: Android Build
 
 # SECURITY: Only manual trigger — no push/PR triggers
-# This prevents unauthorized forks from executing workflows
 on:
   workflow_dispatch:
     inputs:
@@ -16,12 +15,10 @@ on:
   repository_dispatch:
     types: [source-updated]
 
-# SECURITY: Least-privilege permissions
 permissions:
   contents: read
   actions: read
 
-# SECURITY: Prevent parallel runs (limit secret exposure window)
 concurrency:
   group: android-build-${{ github.ref }}
   cancel-in-progress: true
@@ -30,18 +27,21 @@ env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:+HeapDumpOnOutOfMemoryError"
 
 jobs:
-  # SECURITY: Verify caller identity before proceeding
   verify-caller:
     name: Verify Authorized Caller
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check caller permissions
+        env:
+          GH_ACTOR: ${{ github.actor }}
+          GH_EVENT: ${{ github.event_name }}
+          GH_REF: ${{ github.ref }}
         run: |
-          echo "Triggered by: ${{ github.actor }}"
-          echo "Event: ${{ github.event_name }}"
-          echo "Ref: ${{ github.ref }}"
-          # Only allow runs from main branch
-          if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
+          echo "Triggered by: $GH_ACTOR"
+          echo "Event: $GH_EVENT"
+          echo "Ref: $GH_REF"
+          if [[ "$GH_REF" != "refs/heads/main" ]]; then
             echo "::error::Workflow can only run from main branch"
             exit 1
           fi
