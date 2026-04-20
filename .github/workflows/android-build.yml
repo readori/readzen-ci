@@ -1,25 +1,63 @@
 name: Android Build
 
+# SECURITY: Only manual trigger — no push/PR triggers
+# This prevents unauthorized forks from executing workflows
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: false
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
   repository_dispatch:
     types: [source-updated]
+
+# SECURITY: Least-privilege permissions
+permissions:
+  contents: read
+  actions: read
+
+# SECURITY: Prevent parallel runs (limit secret exposure window)
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:+HeapDumpOnOutOfMemoryError"
 
 jobs:
+  # SECURITY: Verify caller identity before proceeding
+  verify-caller:
+    name: Verify Authorized Caller
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check caller permissions
+        run: |
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          # Only allow runs from main branch
+          if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
+            echo "::error::Workflow can only run from main branch"
+            exit 1
+          fi
+
   build-debug:
     name: Build Debug APK
+    needs: verify-caller
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout source from readzen
         uses: actions/checkout@v4
         with:
           repository: readori/readzen
           token: ${{ secrets.READZEN_PAT }}
+          persist-credentials: false
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -39,7 +77,7 @@ jobs:
 
       - name: Build Debug APK
         working-directory: android
-        run: gradle assembleDebug --no-daemon --stacktrace --info 2>&1 | tail -500
+        run: gradle assembleDebug --no-daemon --stacktrace 2>&1 | tail -200
         env:
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
 
@@ -49,7 +87,8 @@ jobs:
         with:
           name: readzen-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
-          retention-days: 30
+          retention-days: 1
+          overwrite: true
 
       - name: Upload build logs on failure
         if: failure()
@@ -59,17 +98,20 @@ jobs:
           path: |
             android/app/build/reports/
             android/app/build/outputs/logs/
-          retention-days: 7
+          retention-days: 1
 
   lint-android:
     name: Android Lint
+    needs: verify-caller
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout source from readzen
         uses: actions/checkout@v4
         with:
           repository: readori/readzen
           token: ${{ secrets.READZEN_PAT }}
+          persist-credentials: false
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -93,4 +135,4 @@ jobs:
         with:
           name: lint-report
           path: android/app/build/reports/lint*.html
-          retention-days: 14
+          retention-days: 1

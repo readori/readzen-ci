@@ -1,0 +1,81 @@
+name: Security Audit
+
+# Runs on any push to detect unauthorized changes
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  audit-workflows:
+    name: Audit Workflow Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check for unauthorized workflow changes
+        run: |
+          echo "=== Security Audit ==="
+          echo "Commit: ${{ github.sha }}"
+          echo "Author: ${{ github.actor }}"
+          echo "Event: ${{ github.event_name }}"
+          echo ""
+
+          # Check if workflow files were modified
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | grep '.github/workflows/' || true)
+          if [ -n "$CHANGED" ]; then
+            echo "⚠️ WORKFLOW FILES MODIFIED:"
+            echo "$CHANGED"
+            echo ""
+            echo "Changed by: ${{ github.actor }}"
+            
+            # Verify the actor is authorized
+            AUTHORIZED_USERS="readori"
+            if echo "$AUTHORIZED_USERS" | grep -qw "${{ github.actor }}"; then
+              echo "✅ Author is authorized"
+            else
+              echo "::error::UNAUTHORIZED workflow modification by ${{ github.actor }}"
+              exit 1
+            fi
+          else
+            echo "✅ No workflow changes detected"
+          fi
+
+      - name: Scan for hardcoded secrets
+        run: |
+          echo "Scanning for potential secret leaks..."
+          # Check for common secret patterns in workflow files
+          FOUND=0
+          for f in .github/workflows/*.yml; do
+            # Check for hardcoded tokens/keys (not ${{ secrets.* }} references)
+            if grep -nP '(ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|AKIA[A-Z0-9]{16})' "$f" 2>/dev/null; then
+              echo "::error file=$f::Potential hardcoded secret detected!"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" = "0" ]; then
+            echo "✅ No hardcoded secrets found in workflows"
+          else
+            exit 1
+          fi
+
+      - name: Verify permissions are minimal
+        run: |
+          echo "Checking workflow permissions..."
+          for f in .github/workflows/*.yml; do
+            echo "--- $f ---"
+            # Check that permissions block exists
+            if ! grep -q 'permissions:' "$f"; then
+              echo "::warning file=$f::No explicit permissions block — uses default (broad) permissions"
+            else
+              echo "✅ Has explicit permissions"
+            fi
+          done

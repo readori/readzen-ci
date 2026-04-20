@@ -1,0 +1,6 @@
+# SECURITY: All changes require review from repository owner
+# This prevents unauthorized modifications to CI workflows
+* @readori
+
+# Workflow files require explicit owner approval
+.github/ @readori
