@@ -84,7 +84,7 @@ jobs:
       - name: Generate keystore if needed
         run: |
           if [ ! -f "$HOME/.android/readzen-ci.keystore" ]; then
-            echo "Keystore not found (cache miss or service down), generating..."
+            echo "Keystore not found, generating fresh..."
             mkdir -p $HOME/.android
             keytool -genkeypair \
               -alias readzen-debug \
@@ -101,8 +101,7 @@ jobs:
           fi
 
       - name: Set keystore path
-        run: |
-          echo "CI_KEYSTORE_PATH=$HOME/.android/readzen-ci.keystore" >> $GITHUB_ENV
+        run: echo "CI_KEYSTORE_PATH=$HOME/.android/readzen-ci.keystore" >> $GITHUB_ENV
 
       - name: Setup Gradle
         id: setup_gradle
@@ -131,7 +130,13 @@ jobs:
       - name: Build Debug APK
         id: debug_build
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build-debug.log
+        run: |
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build-debug.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "::error::Gradle build failed with exit code $BUILD_EXIT"
+            exit $BUILD_EXIT
+          fi
         env:
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
           CI_KEYSTORE_PATH: ${{ env.CI_KEYSTORE_PATH }}
@@ -142,7 +147,7 @@ jobs:
         run: |
           echo "## 🔴 Debug Build Failed" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -E "^e:|error:|Error:|FAILURE|Unresolved reference|Cannot find|not found" build-debug.log | head -80 >> $GITHUB_STEP_SUMMARY || echo "No specific errors found" >> $GITHUB_STEP_SUMMARY
+          grep -E "^e:|error:|Error:|FAILURE|Unresolved reference|Cannot find|not found" build-debug.log | head -80 >> $GITHUB_STEP_SUMMARY || echo "No specific errors" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "### Last 100 Lines" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
@@ -211,7 +216,7 @@ jobs:
       - name: Generate keystore if needed
         run: |
           if [ ! -f "$HOME/.android/readzen-ci.keystore" ]; then
-            echo "Keystore not found, generating..."
+            echo "Keystore not found, generating fresh..."
             mkdir -p $HOME/.android
             keytool -genkeypair \
               -alias readzen-debug \
@@ -228,8 +233,7 @@ jobs:
           fi
 
       - name: Set keystore path
-        run: |
-          echo "CI_KEYSTORE_PATH=$HOME/.android/readzen-ci.keystore" >> $GITHUB_ENV
+        run: echo "CI_KEYSTORE_PATH=$HOME/.android/readzen-ci.keystore" >> $GITHUB_ENV
 
       - name: Setup Gradle
         id: setup_gradle
@@ -258,7 +262,13 @@ jobs:
       - name: Build Release APK
         id: release_build
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build-release.log
+        run: |
+          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build-release.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "::error::Gradle build failed with exit code $BUILD_EXIT"
+            exit $BUILD_EXIT
+          fi
         env:
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
           CI_KEYSTORE_PATH: ${{ env.CI_KEYSTORE_PATH }}
@@ -269,7 +279,7 @@ jobs:
         run: |
           echo "## 🔴 Release Build Failed" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -E "^e:|error:|Error:|FAILURE|Unresolved reference|Cannot find|not found" build-release.log | head -80 >> $GITHUB_STEP_SUMMARY || echo "No specific errors found" >> $GITHUB_STEP_SUMMARY
+          grep -E "^e:|error:|Error:|FAILURE|Unresolved reference|Cannot find|not found" build-release.log | head -80 >> $GITHUB_STEP_SUMMARY || echo "No specific errors" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "### Last 100 Lines" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
