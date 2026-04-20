@@ -1,0 +1,1 @@
+# ReadZen CI\n\nPublic CI/CD pipeline for [ReadZen](https://github.com/readori/readzen).\n\n## Status\n\n- Last fix: Removed Durable Objects (require paid plan), using polling instead.\n- All API routes deploy on Cloudflare Workers Free tier.\n
