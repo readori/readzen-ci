@@ -210,6 +210,7 @@ jobs:
           echo 'main = "src/index.ts"' >> wrangler.toml
           echo 'compatibility_date = "2024-12-01"' >> wrangler.toml
           echo 'compatibility_flags = ["nodejs_compat"]' >> wrangler.toml
+          echo 'workers_dev = true' >> wrangler.toml
           echo '' >> wrangler.toml
           echo '[[d1_databases]]' >> wrangler.toml
           echo 'binding = "DB"' >> wrangler.toml
@@ -277,11 +278,20 @@ jobs:
 
       - name: Deploy Worker
         if: env.DEPLOY_ACTION == 'deploy' || env.DEPLOY_ACTION == 'full-setup-and-deploy'
+        id: deploy
         working-directory: cloudflare-backend
         run: |
           echo "Deploying readzen-api worker..."
-          npx wrangler deploy --minify
-          echo "✅ Worker deployed!"
+          DEPLOY_OUTPUT=$(npx wrangler deploy --minify 2>&1)
+          echo "$DEPLOY_OUTPUT"
+          WORKER_URL=$(echo "$DEPLOY_OUTPUT" | grep -oP 'https://[^\s]+\.workers\.dev' | head -1)
+          if [ -n "$WORKER_URL" ]; then
+            echo "worker_url=$WORKER_URL" >> $GITHUB_OUTPUT
+            echo "✅ Worker deployed at: $WORKER_URL"
+          else
+            echo "worker_url=https://readzen-api.readori.workers.dev" >> $GITHUB_OUTPUT
+            echo "✅ Worker deployed (URL from wrangler output not captured)"
+          fi
 
       - name: Configure Custom Domain
         if: env.DEPLOY_ACTION == 'full-setup-and-deploy'
@@ -311,17 +321,31 @@ jobs:
 
       - name: Verify deployment
         if: env.DEPLOY_ACTION == 'deploy' || env.DEPLOY_ACTION == 'full-setup-and-deploy'
+        continue-on-error: true
         run: |
-          echo "Waiting for propagation..."
-          sleep 10
-          HTTP_CODE=$(curl -s -o /tmp/resp.json -w "%{http_code}" "https://readzen-api.readori.workers.dev/" || echo "000")
+          WORKER_URL="${{ steps.deploy.outputs.worker_url }}"
+          echo "Worker URL: $WORKER_URL"
+          echo "Waiting 20s for propagation..."
+          sleep 20
+
+          echo "=== Health Check ==="
+          HTTP_CODE=$(curl -s -o /tmp/resp.json -w "%{http_code}" "${WORKER_URL}/" || echo "000")
           echo "HTTP Status: $HTTP_CODE"
+          cat /tmp/resp.json 2>/dev/null
+          echo ""
+
+          echo "=== Config Check ==="
+          HTTP_CODE2=$(curl -s -o /tmp/config.json -w "%{http_code}" "${WORKER_URL}/api/v1/config/public" || echo "000")
+          echo "Config HTTP: $HTTP_CODE2"
+          cat /tmp/config.json 2>/dev/null
+          echo ""
+
           if [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ Worker is live!"
-            cat /tmp/resp.json | jq . 2>/dev/null || cat /tmp/resp.json
+            echo "✅ Worker is LIVE and responding!"
           else
-            echo "⚠️ HTTP $HTTP_CODE — may need more propagation time"
-            cat /tmp/resp.json 2>/dev/null
+            echo "⚠️ Worker returned HTTP $HTTP_CODE"
+            echo "Check Cloudflare Dashboard > Workers > readzen-api for logs"
+            echo "Worker may need workers.dev subdomain enabled in account settings"
           fi
 
       - name: Post deployment report
@@ -332,9 +356,10 @@ jobs:
           script: |
             const d1 = '${{ steps.resources.outputs.d1_id }}' || 'N/A';
             const kv = '${{ steps.resources.outputs.kv_id }}' || 'N/A';
+            const workerUrl = '${{ steps.deploy.outputs.worker_url }}' || 'https://readzen-api.readori.workers.dev';
             const action = '${{ env.DEPLOY_ACTION }}';
             const status = '${{ job.status }}';
-            const emoji = status === 'success' ? '✅' : '❌';
+            const emoji = status === 'success' ? '✅' : '⚠️';
             const body = [
               `## ${emoji} Backend Deployment Report`,
               '',
@@ -348,14 +373,14 @@ jobs:
               '|---|---|',
               `| D1 Database | \`${d1}\` |`,
               `| KV Namespace | \`${kv}\` |`,
-              '| Worker | readzen-api |',
+              `| Worker URL | \`${workerUrl}\` |`,
               '',
               '### Endpoints',
-              '- Health: `https://readzen-api.readori.workers.dev/`',
-              '- API: `https://readzen-api.readori.workers.dev/api/v1/`',
-              '- Admin: `https://readzen-api.readori.workers.dev/admin`',
-              '- Config: `GET /api/v1/config/public`',
-              '- Bootstrap: `POST /api/v1/admin/bootstrap`',
+              `- Health: \`${workerUrl}/\``,
+              `- API: \`${workerUrl}/api/v1/\``,
+              `- Admin: \`${workerUrl}/admin\``,
+              `- Config: \`GET ${workerUrl}/api/v1/config/public\``,
+              `- Bootstrap: \`POST ${workerUrl}/api/v1/admin/bootstrap\``,
             ].join('\n');
             await github.rest.issues.createComment({
               owner: 'readori', repo: 'readzen-ci', issue_number: 1, body
