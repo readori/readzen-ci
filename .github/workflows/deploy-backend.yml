@@ -61,25 +61,21 @@ jobs:
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             -H "Content-Type: application/json" \
             --data '{"name": "readzen-db"}')
-          
           SUCCESS=$(echo "$RESULT" | jq -r '.success')
           if [ "$SUCCESS" = "true" ]; then
             DB_ID=$(echo "$RESULT" | jq -r '.result.uuid')
             echo "d1_id=$DB_ID" >> $GITHUB_OUTPUT
             echo "✅ D1 Database created: $DB_ID"
           else
-            # Check if already exists
             EXISTING=$(curl -s \
               "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database" \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
             DB_ID=$(echo "$EXISTING" | jq -r '[.result[] | select(.name=="readzen-db")][0].uuid // empty')
             if [ -n "$DB_ID" ] && [ "$DB_ID" != "null" ]; then
               echo "d1_id=$DB_ID" >> $GITHUB_OUTPUT
-              echo "ℹ️ D1 Database already exists: $DB_ID"
+              echo "ℹ️ D1 already exists: $DB_ID"
             else
-              echo "❌ Failed to create D1"
-              echo "Response: $RESULT"
-              echo "Existing: $EXISTING"
+              echo "❌ Failed to create D1: $RESULT"
               exit 1
             fi
           fi
@@ -94,29 +90,26 @@ jobs:
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             -H "Content-Type: application/json" \
             --data '{"title": "readzen-kv"}')
-          
           SUCCESS=$(echo "$RESULT" | jq -r '.success')
           if [ "$SUCCESS" = "true" ]; then
             KV_ID=$(echo "$RESULT" | jq -r '.result.id')
             echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
             echo "✅ KV Namespace created: $KV_ID"
           else
-            # Check if already exists
             EXISTING=$(curl -s \
               "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces" \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
             KV_ID=$(echo "$EXISTING" | jq -r '[.result[] | select(.title=="readzen-kv")][0].id // empty')
             if [ -n "$KV_ID" ] && [ "$KV_ID" != "null" ]; then
               echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
-              echo "ℹ️ KV Namespace already exists: $KV_ID"
+              echo "ℹ️ KV already exists: $KV_ID"
             else
-              echo "❌ Failed to create KV"
-              echo "Response: $RESULT"
+              echo "❌ Failed to create KV: $RESULT"
               exit 1
             fi
           fi
 
-      - name: Get existing resource IDs (deploy only)
+      - name: Get existing resource IDs
         if: env.DEPLOY_ACTION == 'deploy'
         id: get_ids
         run: |
@@ -124,20 +117,16 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database" \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
           DB_ID=$(echo "$D1_RESULT" | jq -r '[.result[] | select(.name=="readzen-db")][0].uuid // empty')
-          
           KV_RESULT=$(curl -s \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces" \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
           KV_ID=$(echo "$KV_RESULT" | jq -r '[.result[] | select(.title=="readzen-kv")][0].id // empty')
-          
           if [ -z "$DB_ID" ] || [ "$DB_ID" = "null" ] || [ -z "$KV_ID" ] || [ "$KV_ID" = "null" ]; then
-            echo "❌ Resources not found. Run 'full-setup-and-deploy' first."
+            echo "❌ Resources not found. Run full-setup-and-deploy first."
             exit 1
           fi
-          
           echo "d1_id=$DB_ID" >> $GITHUB_OUTPUT
           echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
-          echo "✅ Found D1: $DB_ID, KV: $KV_ID"
 
       - name: Resolve resource IDs
         id: resources
@@ -148,46 +137,39 @@ jobs:
           echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
           echo "Resolved — D1: $D1_ID | KV: $KV_ID"
 
-      - name: Update wrangler.toml with real IDs
+      - name: Generate wrangler.toml
         working-directory: cloudflare-backend
+        env:
+          D1_ID: ${{ steps.resources.outputs.d1_id }}
+          KV_ID: ${{ steps.resources.outputs.kv_id }}
         run: |
-          D1_ID="${{ steps.resources.outputs.d1_id }}"
-          KV_ID="${{ steps.resources.outputs.kv_id }}"
-          
-          cat > wrangler.toml << 'TOML'
-          name = "readzen-api"
-          main = "src/index.ts"
-          compatibility_date = "2024-12-01"
-          compatibility_flags = ["nodejs_compat"]
-          TOML
-          
-          # Append dynamic sections
-          cat >> wrangler.toml << EOF
-
-[[d1_databases]]
-binding = "DB"
-database_name = "readzen-db"
-database_id = "${D1_ID}"
-
-[[kv_namespaces]]
-binding = "KV"
-id = "${KV_ID}"
-
-[vars]
-APP_NAME = "ReadZen API"
-APP_VERSION = "2.0.0"
-CORS_ORIGINS = "https://readzen.app,https://admin.readzen.app"
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_MINUTES = "1440"
-RATE_LIMIT_PER_MINUTE = "60"
-
-[env.dev]
-name = "readzen-api-dev"
-[env.dev.vars]
-CORS_ORIGINS = "http://localhost:3000,http://localhost:8787"
-EOF
-          
-          echo "✅ wrangler.toml updated:"
+          echo 'name = "readzen-api"' > wrangler.toml
+          echo 'main = "src/index.ts"' >> wrangler.toml
+          echo 'compatibility_date = "2024-12-01"' >> wrangler.toml
+          echo 'compatibility_flags = ["nodejs_compat"]' >> wrangler.toml
+          echo '' >> wrangler.toml
+          echo '[[d1_databases]]' >> wrangler.toml
+          echo 'binding = "DB"' >> wrangler.toml
+          echo 'database_name = "readzen-db"' >> wrangler.toml
+          echo "database_id = \"${D1_ID}\"" >> wrangler.toml
+          echo '' >> wrangler.toml
+          echo '[[kv_namespaces]]' >> wrangler.toml
+          echo 'binding = "KV"' >> wrangler.toml
+          echo "id = \"${KV_ID}\"" >> wrangler.toml
+          echo '' >> wrangler.toml
+          echo '[vars]' >> wrangler.toml
+          echo 'APP_NAME = "ReadZen API"' >> wrangler.toml
+          echo 'APP_VERSION = "2.0.0"' >> wrangler.toml
+          echo 'CORS_ORIGINS = "https://readzen.app,https://admin.readzen.app"' >> wrangler.toml
+          echo 'JWT_ALGORITHM = "HS256"' >> wrangler.toml
+          echo 'JWT_EXPIRE_MINUTES = "1440"' >> wrangler.toml
+          echo 'RATE_LIMIT_PER_MINUTE = "60"' >> wrangler.toml
+          echo '' >> wrangler.toml
+          echo '[env.dev]' >> wrangler.toml
+          echo 'name = "readzen-api-dev"' >> wrangler.toml
+          echo '[env.dev.vars]' >> wrangler.toml
+          echo 'CORS_ORIGINS = "http://localhost:3000,http://localhost:8787"' >> wrangler.toml
+          echo "✅ wrangler.toml generated:"
           cat wrangler.toml
 
       - name: Run D1 migrations
@@ -201,28 +183,30 @@ EOF
       - name: Set Worker secrets
         if: env.DEPLOY_ACTION == 'setup-resources' || env.DEPLOY_ACTION == 'full-setup-and-deploy'
         working-directory: cloudflare-backend
+        env:
+          STRIPE_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WH: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          PP_ID: ${{ secrets.PAYPAL_CLIENT_ID }}
+          PP_SECRET: ${{ secrets.PAYPAL_CLIENT_SECRET }}
         run: |
           JWT_SECRET=$(openssl rand -hex 32)
           echo "$JWT_SECRET" | npx wrangler secret put JWT_SECRET
-          
           SECRET_KEY=$(openssl rand -hex 24)
           echo "$SECRET_KEY" | npx wrangler secret put SECRET_KEY
-          
           echo "## 🔐 Deployment Secrets" >> $GITHUB_STEP_SUMMARY
           echo "**SECRET_KEY** (admin bootstrap): \`$SECRET_KEY\`" >> $GITHUB_STEP_SUMMARY
-          echo "⚠️ Save this! Use: POST /api/v1/admin/bootstrap" >> $GITHUB_STEP_SUMMARY
-          
-          if [ -n "${{ secrets.STRIPE_SECRET_KEY }}" ]; then
-            echo "${{ secrets.STRIPE_SECRET_KEY }}" | npx wrangler secret put STRIPE_SECRET_KEY
+          echo "⚠️ Save this! POST /api/v1/admin/bootstrap" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$STRIPE_KEY" ]; then
+            echo "$STRIPE_KEY" | npx wrangler secret put STRIPE_SECRET_KEY
           fi
-          if [ -n "${{ secrets.STRIPE_WEBHOOK_SECRET }}" ]; then
-            echo "${{ secrets.STRIPE_WEBHOOK_SECRET }}" | npx wrangler secret put STRIPE_WEBHOOK_SECRET
+          if [ -n "$STRIPE_WH" ]; then
+            echo "$STRIPE_WH" | npx wrangler secret put STRIPE_WEBHOOK_SECRET
           fi
-          if [ -n "${{ secrets.PAYPAL_CLIENT_ID }}" ]; then
-            echo "${{ secrets.PAYPAL_CLIENT_ID }}" | npx wrangler secret put PAYPAL_CLIENT_ID
+          if [ -n "$PP_ID" ]; then
+            echo "$PP_ID" | npx wrangler secret put PAYPAL_CLIENT_ID
           fi
-          if [ -n "${{ secrets.PAYPAL_CLIENT_SECRET }}" ]; then
-            echo "${{ secrets.PAYPAL_CLIENT_SECRET }}" | npx wrangler secret put PAYPAL_CLIENT_SECRET
+          if [ -n "$PP_SECRET" ]; then
+            echo "$PP_SECRET" | npx wrangler secret put PAYPAL_CLIENT_SECRET
           fi
 
       - name: Deploy Worker
@@ -235,47 +219,40 @@ EOF
 
       - name: Configure Custom Domain
         if: env.DEPLOY_ACTION == 'full-setup-and-deploy'
+        env:
+          CNAME_DOMAIN: ${{ secrets.CNAME_HTTPS }}
         run: |
-          CNAME_DOMAIN="${{ secrets.CNAME_HTTPS }}"
           if [ -n "$CNAME_DOMAIN" ]; then
             echo "Setting custom domain: $CNAME_DOMAIN"
-            # Get zone ID for the domain
             DOMAIN_ROOT=$(echo "$CNAME_DOMAIN" | rev | cut -d. -f1-2 | rev)
             ZONE_RESULT=$(curl -s \
               "https://api.cloudflare.com/client/v4/zones?name=${DOMAIN_ROOT}" \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
             ZONE_ID=$(echo "$ZONE_RESULT" | jq -r '.result[0].id // empty')
-            
             if [ -n "$ZONE_ID" ] && [ "$ZONE_ID" != "null" ]; then
-              # Add worker route
               curl -s -X POST \
                 "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/workers/routes" \
                 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
                 -H "Content-Type: application/json" \
                 --data "{\"pattern\": \"${CNAME_DOMAIN}/*\", \"script\": \"readzen-api\"}"
-              echo "✅ Worker route configured for $CNAME_DOMAIN"
+              echo "✅ Worker route set for $CNAME_DOMAIN"
             else
-              echo "⚠️ Zone not found for domain $DOMAIN_ROOT — configure DNS manually"
-              echo "Worker URL: https://readzen-api.readori.workers.dev/"
+              echo "⚠️ Zone not found — use workers.dev URL"
             fi
           else
-            echo "ℹ️ No CNAME_HTTPS secret — using default workers.dev domain"
+            echo "ℹ️ No CNAME_HTTPS — using workers.dev"
           fi
 
       - name: Verify deployment
         if: env.DEPLOY_ACTION == 'deploy' || env.DEPLOY_ACTION == 'full-setup-and-deploy'
         run: |
-          echo "Waiting for propagation..."
           sleep 8
-          RESPONSE=$(curl -s -w "\n%{http_code}" "https://readzen-api.readori.workers.dev/" 2>/dev/null || true)
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | head -n -1)
-          echo "HTTP $HTTP_CODE: $BODY"
-          
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://readzen-api.readori.workers.dev/" || echo "000")
           if [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ Worker is live and responding!"
+            echo "✅ Worker is live! (HTTP 200)"
+            curl -s "https://readzen-api.readori.workers.dev/" | jq .
           else
-            echo "⚠️ Worker deployed but may need DNS propagation (HTTP $HTTP_CODE)"
+            echo "⚠️ HTTP $HTTP_CODE — may need propagation time"
           fi
 
       - name: Post deployment report
@@ -286,13 +263,28 @@ EOF
           script: |
             const d1 = '${{ steps.resources.outputs.d1_id }}' || 'N/A';
             const kv = '${{ steps.resources.outputs.kv_id }}' || 'N/A';
-            const action = process.env.DEPLOY_ACTION || 'full-setup-and-deploy';
-            
-            const body = `## 🚀 Backend Deployment Report\n\n**Action:** ${action}\n**Date:** ${new Date().toISOString()}\n**Run:** [${context.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})\n\n### Resources\n| Resource | ID |\n|---|---|\n| D1 Database | \`${d1}\` |\n| KV Namespace | \`${kv}\` |\n| Worker | readzen-api |\n\n### Endpoints\n- Health: \`https://readzen-api.readori.workers.dev/\`\n- API: \`https://readzen-api.readori.workers.dev/api/v1/\`\n- Admin: \`https://readzen-api.readori.workers.dev/admin\`\n- Config: \`GET /api/v1/config/public\`\n- Bootstrap: \`POST /api/v1/admin/bootstrap\``;
-            
+            const action = '${{ env.DEPLOY_ACTION }}';
+            const body = [
+              '## 🚀 Backend Deployment Report',
+              '',
+              `**Action:** ${action}`,
+              `**Date:** ${new Date().toISOString()}`,
+              `**Run:** [${context.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              '',
+              '### Resources',
+              '| Resource | ID |',
+              '|---|---|',
+              `| D1 Database | \`${d1}\` |`,
+              `| KV Namespace | \`${kv}\` |`,
+              '| Worker | readzen-api |',
+              '',
+              '### Endpoints',
+              '- Health: `https://readzen-api.readori.workers.dev/`',
+              '- API: `https://readzen-api.readori.workers.dev/api/v1/`',
+              '- Admin: `https://readzen-api.readori.workers.dev/admin`',
+              '- Config: `GET /api/v1/config/public`',
+              '- Bootstrap: `POST /api/v1/admin/bootstrap`'
+            ].join('\n');
             await github.rest.issues.createComment({
-              owner: 'readori', repo: 'readzen-ci', issue_number: 1,
-              body: body
+              owner: 'readori', repo: 'readzen-ci', issue_number: 1, body
             });
-        env:
-          DEPLOY_ACTION: ${{ env.DEPLOY_ACTION }}
