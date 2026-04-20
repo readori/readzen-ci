@@ -59,62 +59,75 @@ jobs:
         working-directory: android
         continue-on-error: true
         run: |
+          set -o pipefail
           ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
+          BUILD_EXIT=$?
+          echo "build_exit=$BUILD_EXIT" >> $GITHUB_OUTPUT
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "BUILD FAILED with exit code $BUILD_EXIT"
+            exit 1
+          fi
 
-      - name: Write error report
-        if: steps.build.outcome == 'failure'
+      - name: Write build report
+        if: always()
         run: |
+          BUILD_LOG="android/build.log"
           {
             echo "# Build Diagnostic Report"
             echo ""
             echo "**Run:** ${{ github.run_id }}"
             echo "**Date:** $(date -u)"
+            echo "**Build outcome:** ${{ steps.build.outcome }}"
             echo ""
-            echo "## Compilation Errors"
-            echo '```'
-            grep -E "^e:|error:|Error:|FAILURE|Unresolved reference|Cannot find|not found|Expecting|Overload resolution|None of the following|Type mismatch|Conflicting|illegal|incompatible|duplicate|missing|w:|warning:" android/build.log | head -120 || echo "No grep matches found"
-            echo '```'
-            echo ""
-            echo "## Last 300 Lines of Build Log"
-            echo '```'
-            tail -300 android/build.log || true
-            echo '```'
-          } > ci-repo/BUILD_ERRORS.md
 
-      - name: Commit error report
-        if: steps.build.outcome == 'failure'
-        working-directory: ci-repo
-        run: |
-          git config user.name "CI Bot"
-          git config user.email "ci@readzen.app"
-          git add BUILD_ERRORS.md
-          git commit -m "ci: build error report [skip ci]" || true
-          git push origin main || true
-
-      - name: Write success report
-        if: steps.build.outcome == 'success'
-        run: |
-          {
-            echo "# Build Diagnostic Report"
-            echo ""
-            echo "## ✅ BUILD SUCCEEDED"
-            echo ""
-            echo "**Run:** ${{ github.run_id }}"
-            echo "**Date:** $(date -u)"
-            APK_PATH=$(find android/app/build/outputs/apk/debug -name '*.apk' 2>/dev/null | head -1)
-            if [ -n "$APK_PATH" ]; then
-              APK_SIZE=$(stat -c%s "$APK_PATH")
-              echo "**APK:** $APK_PATH ($APK_SIZE bytes)"
+            if [ "${{ steps.build.outcome }}" = "failure" ]; then
+              echo "## ❌ BUILD FAILED"
+              echo ""
+              echo "### Compilation Errors"
+              echo '```'
+              if [ -f "$BUILD_LOG" ]; then
+                grep -E "^e:|error:|Error:|FAILURE|Unresolved reference|Cannot find|not found|Expecting|Overload resolution|None of the following|Type mismatch|Conflicting|illegal|incompatible|duplicate|missing" "$BUILD_LOG" | head -120 || echo "No error pattern matches found"
+              else
+                echo "build.log not found"
+              fi
+              echo '```'
+              echo ""
+              echo "### Last 500 Lines of Build Log"
+              echo '```'
+              if [ -f "$BUILD_LOG" ]; then
+                tail -500 "$BUILD_LOG" || true
+              else
+                echo "build.log not found"
+              fi
+              echo '```'
+            else
+              echo "## ✅ BUILD SUCCEEDED"
+              echo ""
+              APK_PATH=$(find android/app/build/outputs/apk/debug -name '*.apk' 2>/dev/null | head -1)
+              if [ -n "$APK_PATH" ]; then
+                APK_SIZE=$(stat -c%s "$APK_PATH")
+                echo "**APK:** $APK_PATH ($APK_SIZE bytes)"
+              else
+                echo "**Warning:** No APK found despite success exit code"
+                echo ""
+                echo "### Build Log (last 200 lines)"
+                echo '```'
+                if [ -f "$BUILD_LOG" ]; then
+                  tail -200 "$BUILD_LOG" || true
+                fi
+                echo '```'
+              fi
             fi
           } > ci-repo/BUILD_ERRORS.md
 
-      - name: Commit success report
-        if: steps.build.outcome == 'success'
+      - name: Commit build report
+        if: always()
         working-directory: ci-repo
         run: |
           git config user.name "CI Bot"
           git config user.email "ci@readzen.app"
           git add BUILD_ERRORS.md
-          git commit -m "ci: build succeeded [skip ci]" || true
-          git push origin main || true
+          git diff --cached --quiet && echo "No changes to commit" || {
+            git commit -m "ci: build diagnostic report [skip ci]"
+            git push origin main
+          }
