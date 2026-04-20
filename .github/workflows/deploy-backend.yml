@@ -223,7 +223,7 @@ jobs:
           echo '' >> wrangler.toml
           echo '[vars]' >> wrangler.toml
           echo 'APP_NAME = "ReadZen API"' >> wrangler.toml
-          echo 'APP_VERSION = "2.0.0"' >> wrangler.toml
+          echo 'APP_VERSION = "2.1.0"' >> wrangler.toml
           echo 'CORS_ORIGINS = "https://readzen.app,https://admin.readzen.app"' >> wrangler.toml
           echo 'JWT_ALGORITHM = "HS256"' >> wrangler.toml
           echo 'JWT_EXPIRE_MINUTES = "1440"' >> wrangler.toml
@@ -289,7 +289,7 @@ jobs:
             echo "worker_url=$WORKER_URL" >> $GITHUB_OUTPUT
             echo "✅ Worker deployed at: $WORKER_URL"
           else
-            echo "worker_url=https://readzen-api.readori.workers.dev" >> $GITHUB_OUTPUT
+            echo "worker_url=https://readzen-api.iilove.workers.dev" >> $GITHUB_OUTPUT
             echo "✅ Worker deployed (URL from wrangler output not captured)"
           fi
 
@@ -356,7 +356,7 @@ jobs:
           script: |
             const d1 = '${{ steps.resources.outputs.d1_id }}' || 'N/A';
             const kv = '${{ steps.resources.outputs.kv_id }}' || 'N/A';
-            const workerUrl = '${{ steps.deploy.outputs.worker_url }}' || 'https://readzen-api.readori.workers.dev';
+            const workerUrl = '${{ steps.deploy.outputs.worker_url }}' || 'https://readzen-api.iilove.workers.dev';
             const action = '${{ env.DEPLOY_ACTION }}';
             const status = '${{ job.status }}';
             const emoji = status === 'success' ? '✅' : '⚠️';
