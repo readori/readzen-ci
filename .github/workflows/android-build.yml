@@ -81,12 +81,29 @@ jobs:
           echo "✅ Gradle wrapper generated"
 
       - name: Build Debug APK
+        id: debug_build
         working-directory: android
         run: |
           set -o pipefail
           ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build-debug.log
         env:
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+
+      - name: Extract build errors on failure
+        if: failure() && steps.debug_build.outcome == 'failure'
+        working-directory: android
+        run: |
+          echo "## 🔴 Debug Build Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Compilation Errors" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "^e:|error:|Error:|FAILURE|Unresolved reference|Cannot find|not found|Expecting|Overload resolution|None of the following|Type mismatch|Conflicting" build-debug.log | head -80 >> $GITHUB_STEP_SUMMARY || echo "No specific error lines found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Last 150 Lines of Build Log" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -150 build-debug.log >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Verify APK exists
         working-directory: android
@@ -150,12 +167,29 @@ jobs:
           chmod +x gradlew
 
       - name: Build Release APK
+        id: release_build
         working-directory: android
         run: |
           set -o pipefail
           ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build-release.log
         env:
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+
+      - name: Extract build errors on failure
+        if: failure() && steps.release_build.outcome == 'failure'
+        working-directory: android
+        run: |
+          echo "## 🔴 Release Build Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Compilation Errors" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "^e:|error:|Error:|FAILURE|Unresolved reference|Cannot find|not found|Expecting|Overload resolution|None of the following|Type mismatch|Conflicting" build-release.log | head -80 >> $GITHUB_STEP_SUMMARY || echo "No specific error lines found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Last 150 Lines of Build Log" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -150 build-release.log >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Verify APK exists
         working-directory: android
