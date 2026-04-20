@@ -1,6 +1,6 @@
 # ReadZen CI
 
-Public CI/CD pipeline for [ReadZen](https://github.com/readori/readzen) — rideshare driver assistant app.
+Public CI/CD pipeline for [ReadZen].
 
 Uses public repo CI minutes to build, test, and deploy from the private `readori/readzen` repository.
 
