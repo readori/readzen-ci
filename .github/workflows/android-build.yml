@@ -13,8 +13,6 @@ on:
           - release
   repository_dispatch:
     types: [source-updated]
-  push:
-    branches: [main]
 
 permissions:
   contents: read
