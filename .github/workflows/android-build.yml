@@ -67,23 +67,32 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Generate consistent keystore
+      - name: Restore cached keystore
+        id: cache-keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/readzen-ci.keystore
+          key: readzen-debug-keystore-v1
+
+      - name: Generate keystore (first run only)
+        if: steps.cache-keystore.outputs.cache-hit != 'true'
         run: |
           mkdir -p $HOME/.android
-          KEYSTORE_PATH="$HOME/.android/readzen-ci.keystore"
-          if [ ! -f "$KEYSTORE_PATH" ]; then
-            keytool -genkeypair \
-              -alias readzen-debug \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 36500 \
-              -keystore "$KEYSTORE_PATH" \
-              -storepass readzen2024 \
-              -keypass readzen2024 \
-              -dname "CN=ReadZen CI, OU=Development, O=ReadZen, L=Unknown, ST=Unknown, C=US"
-          fi
-          echo "CI_KEYSTORE_PATH=$KEYSTORE_PATH" >> $GITHUB_ENV
-          echo "✅ Consistent keystore ready at $KEYSTORE_PATH"
+          keytool -genkeypair \
+            -alias readzen-debug \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 36500 \
+            -keystore "$HOME/.android/readzen-ci.keystore" \
+            -storepass readzen2024 \
+            -keypass readzen2024 \
+            -dname "CN=ReadZen CI, OU=Development, O=ReadZen, L=Unknown, ST=Unknown, C=US"
+          echo "✅ New keystore generated (will be cached for future builds)"
+
+      - name: Set keystore path
+        run: |
+          echo "CI_KEYSTORE_PATH=$HOME/.android/readzen-ci.keystore" >> $GITHUB_ENV
+          echo "✅ Using cached keystore for consistent APK signatures"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
@@ -176,21 +185,32 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Generate consistent keystore
+      - name: Restore cached keystore
+        id: cache-keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/readzen-ci.keystore
+          key: readzen-debug-keystore-v1
+
+      - name: Generate keystore (first run only)
+        if: steps.cache-keystore.outputs.cache-hit != 'true'
         run: |
           mkdir -p $HOME/.android
-          KEYSTORE_PATH="$HOME/.android/readzen-ci.keystore"
           keytool -genkeypair \
             -alias readzen-debug \
             -keyalg RSA \
             -keysize 2048 \
             -validity 36500 \
-            -keystore "$KEYSTORE_PATH" \
+            -keystore "$HOME/.android/readzen-ci.keystore" \
             -storepass readzen2024 \
             -keypass readzen2024 \
             -dname "CN=ReadZen CI, OU=Development, O=ReadZen, L=Unknown, ST=Unknown, C=US"
-          echo "CI_KEYSTORE_PATH=$KEYSTORE_PATH" >> $GITHUB_ENV
-          echo "✅ Consistent keystore ready"
+          echo "✅ New keystore generated (will be cached for future builds)"
+
+      - name: Set keystore path
+        run: |
+          echo "CI_KEYSTORE_PATH=$HOME/.android/readzen-ci.keystore" >> $GITHUB_ENV
+          echo "✅ Using cached keystore for consistent APK signatures"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
