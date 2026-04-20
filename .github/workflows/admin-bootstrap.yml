@@ -1,16 +1,12 @@
 name: Admin Bootstrap & Payment Setup
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'TRIGGER_ADMIN'
   workflow_dispatch:
     inputs:
       action:
         description: 'Action to perform'
         required: true
-        default: 'bootstrap-admin'
+        default: 'verify-all-endpoints'
         type: choice
         options:
           - bootstrap-admin
@@ -40,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      ACTION: ${{ inputs.action || 'bootstrap-admin' }}
+      ACTION: ${{ inputs.action || 'verify-all-endpoints' }}
       ADMIN_EMAIL: ${{ inputs.admin_email || 'admin@readzen.app' }}
       ADMIN_PASSWORD: ${{ inputs.admin_password || '' }}
     steps:
@@ -64,19 +60,21 @@ jobs:
         run: |
           D1_ID="43298902-b2fa-4ae5-af86-c781226abd22"
           KV_ID="0a4bbbf370b8451394ef3c7d48abbd8f"
-          echo 'name = "readzen-api"' > wrangler.toml
-          echo 'main = "src/index.ts"' >> wrangler.toml
-          echo 'compatibility_date = "2024-12-01"' >> wrangler.toml
-          echo 'compatibility_flags = ["nodejs_compat"]' >> wrangler.toml
-          echo 'workers_dev = true' >> wrangler.toml
-          echo '' >> wrangler.toml
-          echo '[[d1_databases]]' >> wrangler.toml
-          echo 'binding = "DB"' >> wrangler.toml
-          echo 'database_name = "readzen-db"' >> wrangler.toml
+          cat > wrangler.toml << 'EOF'
+          name = "readzen-api"
+          main = "src/index.ts"
+          compatibility_date = "2024-12-01"
+          compatibility_flags = ["nodejs_compat"]
+          workers_dev = true
+          EOF
+          echo "" >> wrangler.toml
+          echo "[[d1_databases]]" >> wrangler.toml
+          echo "binding = \"DB\"" >> wrangler.toml
+          echo "database_name = \"readzen-db\"" >> wrangler.toml
           echo "database_id = \"${D1_ID}\"" >> wrangler.toml
-          echo '' >> wrangler.toml
-          echo '[[kv_namespaces]]' >> wrangler.toml
-          echo 'binding = "KV"' >> wrangler.toml
+          echo "" >> wrangler.toml
+          echo "[[kv_namespaces]]" >> wrangler.toml
+          echo "binding = \"KV\"" >> wrangler.toml
           echo "id = \"${KV_ID}\"" >> wrangler.toml
 
       - name: Bootstrap Admin
@@ -84,79 +82,31 @@ jobs:
         working-directory: cloudflare-backend
         run: |
           echo "=== Admin Bootstrap ==="
-          echo "Email: $ADMIN_EMAIL"
-
-          # Generate a new SECRET_KEY and set it on the Worker
           NEW_SECRET_KEY=$(openssl rand -hex 24)
           echo "$NEW_SECRET_KEY" | wrangler secret put SECRET_KEY
-          echo "✅ SECRET_KEY updated on Worker"
-
-          # Wait for secret propagation
-          echo "Waiting for secret propagation..."
+          echo "✅ SECRET_KEY updated"
           sleep 8
-
-          # Generate password if not provided
           if [ -z "$ADMIN_PASSWORD" ]; then
             ADMIN_PASSWORD=$(openssl rand -base64 16 | tr -d '=/+' | head -c 16)
-            echo "Auto-generated password"
           fi
-
           WORKER_URL="https://readzen-api.iilove.workers.dev"
-
-          echo "Calling bootstrap endpoint..."
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "${WORKER_URL}/api/v1/admin/bootstrap" \
             -H "Content-Type: application/json" \
             -d "{\"secret_key\":\"${NEW_SECRET_KEY}\",\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}")
-
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY=$(echo "$RESPONSE" | sed '$d')
-          echo "HTTP: $HTTP_CODE"
-          echo "Response: $BODY"
-
+          echo "HTTP: $HTTP_CODE | Response: $BODY"
           if echo "$BODY" | jq -e '.success' > /dev/null 2>&1; then
-            echo "✅ Admin account created successfully!"
             echo "## 🔐 Admin Credentials" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
             echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
             echo "|---|---|" >> $GITHUB_STEP_SUMMARY
             echo "| Email | \`${ADMIN_EMAIL}\` |" >> $GITHUB_STEP_SUMMARY
             echo "| Password | \`${ADMIN_PASSWORD}\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| Admin Panel | https://readzen-api.iilove.workers.dev/admin |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "⚠️ **Save these credentials immediately! They cannot be recovered.**" >> $GITHUB_STEP_SUMMARY
-          elif echo "$BODY" | grep -q "already exists"; then
-            echo "ℹ️ Admin already exists."
-            echo "## ℹ️ Admin Already Exists" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "An admin account has already been created." >> $GITHUB_STEP_SUMMARY
-            echo "Login at: https://readzen-api.iilove.workers.dev/admin" >> $GITHUB_STEP_SUMMARY
+            echo "| Panel | https://readzen-api.iilove.workers.dev/admin |" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **Save immediately!**" >> $GITHUB_STEP_SUMMARY
           else
-            echo "⚠️ Bootstrap response: $BODY"
-            echo "Retrying after longer wait..."
-            sleep 10
-            RESPONSE2=$(curl -s -w "\n%{http_code}" -X POST \
-              "${WORKER_URL}/api/v1/admin/bootstrap" \
-              -H "Content-Type: application/json" \
-              -d "{\"secret_key\":\"${NEW_SECRET_KEY}\",\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}")
-            HTTP2=$(echo "$RESPONSE2" | tail -1)
-            BODY2=$(echo "$RESPONSE2" | sed '$d')
-            echo "Retry HTTP: $HTTP2"
-            echo "Retry Response: $BODY2"
-            if echo "$BODY2" | jq -e '.success' > /dev/null 2>&1; then
-              echo "✅ Admin created on retry!"
-              echo "## 🔐 Admin Credentials" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
-              echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-              echo "| Email | \`${ADMIN_EMAIL}\` |" >> $GITHUB_STEP_SUMMARY
-              echo "| Password | \`${ADMIN_PASSWORD}\` |" >> $GITHUB_STEP_SUMMARY
-              echo "| Admin Panel | https://readzen-api.iilove.workers.dev/admin |" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "## ❌ Bootstrap Failed" >> $GITHUB_STEP_SUMMARY
-              echo "Error: \`$BODY2\`" >> $GITHUB_STEP_SUMMARY
-              echo "Try running again or check Worker logs" >> $GITHUB_STEP_SUMMARY
-            fi
+            echo "## ℹ️ Result: $BODY" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Update Payment Secrets
@@ -169,94 +119,38 @@ jobs:
           PP_SECRET: ${{ secrets.PAYPAL_CLIENT_SECRET }}
         run: |
           echo "=== Updating Payment Secrets ==="
-          CONFIGURED=0
-
-          if [ -n "$STRIPE_KEY" ]; then
-            echo "$STRIPE_KEY" | wrangler secret put STRIPE_SECRET_KEY
-            echo "✅ STRIPE_SECRET_KEY configured"
-            CONFIGURED=$((CONFIGURED+1))
-          else
-            echo "⚠️ STRIPE_SECRET_KEY not set in repo secrets"
-          fi
-
-          if [ -n "$STRIPE_WH" ]; then
-            echo "$STRIPE_WH" | wrangler secret put STRIPE_WEBHOOK_SECRET
-            echo "✅ STRIPE_WEBHOOK_SECRET configured"
-            CONFIGURED=$((CONFIGURED+1))
-          else
-            echo "⚠️ STRIPE_WEBHOOK_SECRET not set"
-          fi
-
-          if [ -n "$PP_ID" ]; then
-            echo "$PP_ID" | wrangler secret put PAYPAL_CLIENT_ID
-            echo "✅ PAYPAL_CLIENT_ID configured"
-            CONFIGURED=$((CONFIGURED+1))
-          else
-            echo "⚠️ PAYPAL_CLIENT_ID not set"
-          fi
-
-          if [ -n "$PP_SECRET" ]; then
-            echo "$PP_SECRET" | wrangler secret put PAYPAL_CLIENT_SECRET
-            echo "✅ PAYPAL_CLIENT_SECRET configured"
-            CONFIGURED=$((CONFIGURED+1))
-          else
-            echo "⚠️ PAYPAL_CLIENT_SECRET not set"
-          fi
-
-          echo ""
-          echo "## 💳 Payment Configuration" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Configured **$CONFIGURED** payment secrets." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Stripe Webhook URL" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "https://readzen-api.iilove.workers.dev/api/v1/payment/stripe/webhook" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### PayPal Webhook URL" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "https://readzen-api.iilove.workers.dev/api/v1/payment/paypal/capture" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Add these secrets to readzen-ci if not yet configured:" >> $GITHUB_STEP_SUMMARY
-          echo "| Secret | Source |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| STRIPE_SECRET_KEY | [Stripe Dashboard](https://dashboard.stripe.com/apikeys) |" >> $GITHUB_STEP_SUMMARY
-          echo "| STRIPE_WEBHOOK_SECRET | Stripe → Webhooks → Signing secret |" >> $GITHUB_STEP_SUMMARY
-          echo "| PAYPAL_CLIENT_ID | [PayPal Developer](https://developer.paypal.com/dashboard/applications) |" >> $GITHUB_STEP_SUMMARY
-          echo "| PAYPAL_CLIENT_SECRET | PayPal app credentials |" >> $GITHUB_STEP_SUMMARY
+          C=0
+          [ -n "$STRIPE_KEY" ] && echo "$STRIPE_KEY" | wrangler secret put STRIPE_SECRET_KEY && C=$((C+1)) && echo "✅ Stripe key"
+          [ -n "$STRIPE_WH" ] && echo "$STRIPE_WH" | wrangler secret put STRIPE_WEBHOOK_SECRET && C=$((C+1)) && echo "✅ Stripe webhook"
+          [ -n "$PP_ID" ] && echo "$PP_ID" | wrangler secret put PAYPAL_CLIENT_ID && C=$((C+1)) && echo "✅ PayPal ID"
+          [ -n "$PP_SECRET" ] && echo "$PP_SECRET" | wrangler secret put PAYPAL_CLIENT_SECRET && C=$((C+1)) && echo "✅ PayPal secret"
+          echo "## 💳 Payment: $C secrets configured" >> $GITHUB_STEP_SUMMARY
+          echo "Stripe Webhook: \`https://readzen-api.iilove.workers.dev/api/v1/payment/stripe/webhook\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Verify All Endpoints
         if: env.ACTION == 'verify-all-endpoints'
         run: |
           WORKER_URL="https://readzen-api.iilove.workers.dev"
-          echo "=== Endpoint Verification ==="
-
-          echo "## 🔍 API Endpoint Verification" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔍 API Verification" >> $GITHUB_STEP_SUMMARY
           echo "| Endpoint | HTTP | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
-
-          check_endpoint() {
-            local METHOD=$1 PATH=$2 EXPECT=$3 NAME=$4
-            HTTP=$(curl -s -o /tmp/resp.txt -w "%{http_code}" -X "$METHOD" "${WORKER_URL}${PATH}" -H "Content-Type: application/json")
-            RESP=$(cat /tmp/resp.txt | head -c 80)
-            if [ "$HTTP" = "$EXPECT" ]; then
-              echo "✅ $NAME: $HTTP"
-              echo "| \`$METHOD $PATH\` | $HTTP | ✅ |" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "⚠️ $NAME: $HTTP (expected $EXPECT)"
-              echo "| \`$METHOD $PATH\` | $HTTP (expect $EXPECT) | ⚠️ |" >> $GITHUB_STEP_SUMMARY
-            fi
+          check() {
+            HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X "$1" "${WORKER_URL}$2" -H "Content-Type: application/json")
+            [ "$HTTP" = "$3" ] && S="✅" || S="⚠️"
+            echo "$S $4: $HTTP"
+            echo "| \`$1 $2\` | $HTTP | $S |" >> $GITHUB_STEP_SUMMARY
           }
-
-          check_endpoint GET "/" 200 "Root"
-          check_endpoint GET "/health" 200 "Health"
-          check_endpoint GET "/api/v1/config/public" 200 "Public Config"
-          check_endpoint GET "/admin" 200 "Admin Panel"
-          check_endpoint GET "/api/v1/admin/stats" 401 "Admin (auth required)"
-          check_endpoint GET "/api/v1/subscription/status" 401 "Subscription (auth required)"
-          check_endpoint GET "/api/v1/settings/user" 401 "Settings (auth required)"
+          check GET "/" 200 "Root"
+          check GET "/health" 200 "Health"
+          check GET "/api/v1/config/public" 200 "Config"
+          check GET "/admin" 200 "Admin Panel"
+          check GET "/api/v1/admin/stats" 401 "Admin (auth)"
+          check GET "/api/v1/subscription/status" 401 "Subscription (auth)"
+          check GET "/api/v1/payment/methods" 401 "Payment (auth)"
+          check GET "/api/v1/settings/user" 401 "Settings (auth)"
+          check GET "/api/v1/orders/recent" 401 "Orders (auth)"
+          check GET "/api/v1/analytics/earnings" 401 "Analytics (auth)"
+          check GET "/api/v1/realtime/poll" 401 "Realtime (auth)"
 
       - name: Post report
         if: always()
@@ -267,14 +161,7 @@ jobs:
             const action = '${{ env.ACTION }}';
             const status = '${{ job.status }}';
             const emoji = status === 'success' ? '✅' : '❌';
-            const body = [
-              `## ${emoji} Admin/Payment Setup — ${action}`,
-              '',
-              `**Status:** ${status}`,
-              `**Run:** [${context.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
-              '',
-              'Check **Job Summary** for credentials and details.',
-            ].join('\n');
             await github.rest.issues.createComment({
-              owner: 'readori', repo: 'readzen-ci', issue_number: 1, body
+              owner: 'readori', repo: 'readzen-ci', issue_number: 1,
+              body: `## ${emoji} Admin/Payment — ${action}\n\n**Status:** ${status}\n**Run:** [${context.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})\n\nSee Job Summary for details.`
             });
