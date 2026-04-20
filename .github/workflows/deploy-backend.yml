@@ -35,6 +35,47 @@ jobs:
     env:
       DEPLOY_ACTION: ${{ inputs.action || 'full-setup-and-deploy' }}
     steps:
+      - name: Validate credentials
+        run: |
+          echo "=== Credential Validation ==="
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "❌ CF_ACCOUNT_ID secret is NOT set!"
+            echo "Please add CF_ACCOUNT_ID to repository secrets"
+            exit 1
+          fi
+          echo "✅ CF_ACCOUNT_ID is set (length: ${#CLOUDFLARE_ACCOUNT_ID})"
+          
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "❌ CF_API_TOKEN secret is NOT set!"
+            echo "Please add CF_API_TOKEN to repository secrets"
+            exit 1
+          fi
+          echo "✅ CF_API_TOKEN is set (length: ${#CLOUDFLARE_API_TOKEN})"
+          
+          echo ""
+          echo "=== Testing Token Validity ==="
+          VERIFY=$(curl -s -w "\n%{http_code}" \
+            "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+          HTTP_CODE=$(echo "$VERIFY" | tail -1)
+          BODY=$(echo "$VERIFY" | sed '$d')
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response: $BODY"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo ""
+            echo "❌ Token verification failed!"
+            echo "The CF_API_TOKEN may be invalid or expired."
+            echo "Please create a new API Token at: https://dash.cloudflare.com/profile/api-tokens"
+            echo "Required permissions:"
+            echo "  - Account > D1 > Edit"
+            echo "  - Account > Workers KV Storage > Edit"  
+            echo "  - Account > Cloudflare Workers > Edit"
+            echo "  - Zone > Workers Routes > Edit (for custom domains)"
+            exit 1
+          fi
+          echo "✅ Token is valid!"
+
       - name: Checkout source
         uses: actions/checkout@v4
         with:
@@ -55,27 +96,47 @@ jobs:
         if: env.DEPLOY_ACTION == 'setup-resources' || env.DEPLOY_ACTION == 'full-setup-and-deploy'
         id: create_d1
         run: |
-          echo "Creating D1 database..."
-          RESULT=$(curl -s -X POST \
+          set +e
+          echo "=== Creating D1 Database ==="
+          echo "Account: ${CLOUDFLARE_ACCOUNT_ID:0:8}..."
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database" \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             -H "Content-Type: application/json" \
-            --data '{"name": "readzen-db"}')
-          SUCCESS=$(echo "$RESULT" | jq -r '.success')
+            -d '{"name":"readzen-db"}')
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          echo "HTTP: $HTTP_CODE"
+          echo "Body: $BODY"
+          
+          SUCCESS=$(echo "$BODY" | jq -r '.success // "false"' 2>/dev/null)
+          
           if [ "$SUCCESS" = "true" ]; then
-            DB_ID=$(echo "$RESULT" | jq -r '.result.uuid')
+            DB_ID=$(echo "$BODY" | jq -r '.result.uuid')
             echo "d1_id=$DB_ID" >> $GITHUB_OUTPUT
-            echo "✅ D1 Database created: $DB_ID"
+            echo "✅ D1 created: $DB_ID"
           else
-            EXISTING=$(curl -s \
+            echo ""
+            echo "Creation failed or already exists, trying to list..."
+            LIST_RESP=$(curl -s -w "\n%{http_code}" \
               "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database" \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
-            DB_ID=$(echo "$EXISTING" | jq -r '[.result[] | select(.name=="readzen-db")][0].uuid // empty')
+            LIST_HTTP=$(echo "$LIST_RESP" | tail -1)
+            LIST_BODY=$(echo "$LIST_RESP" | sed '$d')
+            echo "List HTTP: $LIST_HTTP"
+            echo "List Body: $LIST_BODY"
+            
+            DB_ID=$(echo "$LIST_BODY" | jq -r '[.result[] | select(.name=="readzen-db")][0].uuid // empty' 2>/dev/null)
             if [ -n "$DB_ID" ] && [ "$DB_ID" != "null" ]; then
               echo "d1_id=$DB_ID" >> $GITHUB_OUTPUT
               echo "ℹ️ D1 already exists: $DB_ID"
             else
-              echo "❌ Failed to create D1: $RESULT"
+              echo "❌ Cannot create or find D1 database"
+              echo "Error details: $BODY"
+              echo "Token may lack D1 permissions."
+              echo "Required: Account > D1 > Edit"
               exit 1
             fi
           fi
@@ -84,27 +145,46 @@ jobs:
         if: env.DEPLOY_ACTION == 'setup-resources' || env.DEPLOY_ACTION == 'full-setup-and-deploy'
         id: create_kv
         run: |
-          echo "Creating KV namespace..."
-          RESULT=$(curl -s -X POST \
+          set +e
+          echo "=== Creating KV Namespace ==="
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces" \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             -H "Content-Type: application/json" \
-            --data '{"title": "readzen-kv"}')
-          SUCCESS=$(echo "$RESULT" | jq -r '.success')
+            -d '{"title":"readzen-kv"}')
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          echo "HTTP: $HTTP_CODE"
+          echo "Body: $BODY"
+          
+          SUCCESS=$(echo "$BODY" | jq -r '.success // "false"' 2>/dev/null)
+          
           if [ "$SUCCESS" = "true" ]; then
-            KV_ID=$(echo "$RESULT" | jq -r '.result.id')
+            KV_ID=$(echo "$BODY" | jq -r '.result.id')
             echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
-            echo "✅ KV Namespace created: $KV_ID"
+            echo "✅ KV created: $KV_ID"
           else
-            EXISTING=$(curl -s \
+            echo ""
+            echo "Creation failed or already exists, trying to list..."
+            LIST_RESP=$(curl -s -w "\n%{http_code}" \
               "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces" \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
-            KV_ID=$(echo "$EXISTING" | jq -r '[.result[] | select(.title=="readzen-kv")][0].id // empty')
+            LIST_HTTP=$(echo "$LIST_RESP" | tail -1)
+            LIST_BODY=$(echo "$LIST_RESP" | sed '$d')
+            echo "List HTTP: $LIST_HTTP"
+            echo "List Body: $LIST_BODY"
+            
+            KV_ID=$(echo "$LIST_BODY" | jq -r '[.result[] | select(.title=="readzen-kv")][0].id // empty' 2>/dev/null)
             if [ -n "$KV_ID" ] && [ "$KV_ID" != "null" ]; then
               echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
               echo "ℹ️ KV already exists: $KV_ID"
             else
-              echo "❌ Failed to create KV: $RESULT"
+              echo "❌ Cannot create or find KV namespace"
+              echo "Error details: $BODY"
+              echo "Token may lack KV permissions."
+              echo "Required: Account > Workers KV Storage > Edit"
               exit 1
             fi
           fi
@@ -113,20 +193,25 @@ jobs:
         if: env.DEPLOY_ACTION == 'deploy'
         id: get_ids
         run: |
-          D1_RESULT=$(curl -s \
+          set +e
+          D1_RESP=$(curl -s \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database" \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
-          DB_ID=$(echo "$D1_RESULT" | jq -r '[.result[] | select(.name=="readzen-db")][0].uuid // empty')
-          KV_RESULT=$(curl -s \
+          DB_ID=$(echo "$D1_RESP" | jq -r '[.result[] | select(.name=="readzen-db")][0].uuid // empty' 2>/dev/null)
+          
+          KV_RESP=$(curl -s \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces" \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
-          KV_ID=$(echo "$KV_RESULT" | jq -r '[.result[] | select(.title=="readzen-kv")][0].id // empty')
+          KV_ID=$(echo "$KV_RESP" | jq -r '[.result[] | select(.title=="readzen-kv")][0].id // empty' 2>/dev/null)
+          
           if [ -z "$DB_ID" ] || [ "$DB_ID" = "null" ] || [ -z "$KV_ID" ] || [ "$KV_ID" = "null" ]; then
             echo "❌ Resources not found. Run full-setup-and-deploy first."
+            echo "D1: $DB_ID | KV: $KV_ID"
             exit 1
           fi
           echo "d1_id=$DB_ID" >> $GITHUB_OUTPUT
           echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
+          echo "✅ Found D1: $DB_ID | KV: $KV_ID"
 
       - name: Resolve resource IDs
         id: resources
@@ -135,7 +220,7 @@ jobs:
           KV_ID="${{ steps.create_kv.outputs.kv_id }}${{ steps.get_ids.outputs.kv_id }}"
           echo "d1_id=$D1_ID" >> $GITHUB_OUTPUT
           echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
-          echo "Resolved — D1: $D1_ID | KV: $KV_ID"
+          echo "✅ Resolved — D1: $D1_ID | KV: $KV_ID"
 
       - name: Generate wrangler.toml
         working-directory: cloudflare-backend
@@ -143,33 +228,36 @@ jobs:
           D1_ID: ${{ steps.resources.outputs.d1_id }}
           KV_ID: ${{ steps.resources.outputs.kv_id }}
         run: |
-          echo 'name = "readzen-api"' > wrangler.toml
-          echo 'main = "src/index.ts"' >> wrangler.toml
-          echo 'compatibility_date = "2024-12-01"' >> wrangler.toml
-          echo 'compatibility_flags = ["nodejs_compat"]' >> wrangler.toml
-          echo '' >> wrangler.toml
-          echo '[[d1_databases]]' >> wrangler.toml
-          echo 'binding = "DB"' >> wrangler.toml
-          echo 'database_name = "readzen-db"' >> wrangler.toml
+          cat > wrangler.toml << 'TOML_HEADER'
+          name = "readzen-api"
+          main = "src/index.ts"
+          compatibility_date = "2024-12-01"
+          compatibility_flags = ["nodejs_compat"]
+          TOML_HEADER
+          
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' wrangler.toml
+          
+          echo "" >> wrangler.toml
+          echo "[[d1_databases]]" >> wrangler.toml
+          echo "binding = \"DB\"" >> wrangler.toml
+          echo "database_name = \"readzen-db\"" >> wrangler.toml
           echo "database_id = \"${D1_ID}\"" >> wrangler.toml
-          echo '' >> wrangler.toml
-          echo '[[kv_namespaces]]' >> wrangler.toml
-          echo 'binding = "KV"' >> wrangler.toml
+          echo "" >> wrangler.toml
+          echo "[[kv_namespaces]]" >> wrangler.toml
+          echo "binding = \"KV\"" >> wrangler.toml
           echo "id = \"${KV_ID}\"" >> wrangler.toml
-          echo '' >> wrangler.toml
-          echo '[vars]' >> wrangler.toml
-          echo 'APP_NAME = "ReadZen API"' >> wrangler.toml
-          echo 'APP_VERSION = "2.0.0"' >> wrangler.toml
-          echo 'CORS_ORIGINS = "https://readzen.app,https://admin.readzen.app"' >> wrangler.toml
-          echo 'JWT_ALGORITHM = "HS256"' >> wrangler.toml
-          echo 'JWT_EXPIRE_MINUTES = "1440"' >> wrangler.toml
-          echo 'RATE_LIMIT_PER_MINUTE = "60"' >> wrangler.toml
-          echo '' >> wrangler.toml
-          echo '[env.dev]' >> wrangler.toml
-          echo 'name = "readzen-api-dev"' >> wrangler.toml
-          echo '[env.dev.vars]' >> wrangler.toml
-          echo 'CORS_ORIGINS = "http://localhost:3000,http://localhost:8787"' >> wrangler.toml
-          echo "✅ wrangler.toml generated:"
+          echo "" >> wrangler.toml
+          echo "[vars]" >> wrangler.toml
+          echo "APP_NAME = \"ReadZen API\"" >> wrangler.toml
+          echo "APP_VERSION = \"2.0.0\"" >> wrangler.toml
+          echo "CORS_ORIGINS = \"https://readzen.app,https://admin.readzen.app\"" >> wrangler.toml
+          echo "JWT_ALGORITHM = \"HS256\"" >> wrangler.toml
+          echo "JWT_EXPIRE_MINUTES = \"1440\"" >> wrangler.toml
+          echo "RATE_LIMIT_PER_MINUTE = \"60\"" >> wrangler.toml
+          
+          echo ""
+          echo "=== Generated wrangler.toml ==="
           cat wrangler.toml
 
       - name: Run D1 migrations
@@ -191,22 +279,29 @@ jobs:
         run: |
           JWT_SECRET=$(openssl rand -hex 32)
           echo "$JWT_SECRET" | npx wrangler secret put JWT_SECRET
+          
           SECRET_KEY=$(openssl rand -hex 24)
           echo "$SECRET_KEY" | npx wrangler secret put SECRET_KEY
+          
           echo "## 🔐 Deployment Secrets" >> $GITHUB_STEP_SUMMARY
           echo "**SECRET_KEY** (admin bootstrap): \`$SECRET_KEY\`" >> $GITHUB_STEP_SUMMARY
           echo "⚠️ Save this! POST /api/v1/admin/bootstrap" >> $GITHUB_STEP_SUMMARY
+          
           if [ -n "$STRIPE_KEY" ]; then
             echo "$STRIPE_KEY" | npx wrangler secret put STRIPE_SECRET_KEY
+            echo "✅ STRIPE_SECRET_KEY set"
           fi
           if [ -n "$STRIPE_WH" ]; then
             echo "$STRIPE_WH" | npx wrangler secret put STRIPE_WEBHOOK_SECRET
+            echo "✅ STRIPE_WEBHOOK_SECRET set"
           fi
           if [ -n "$PP_ID" ]; then
             echo "$PP_ID" | npx wrangler secret put PAYPAL_CLIENT_ID
+            echo "✅ PAYPAL_CLIENT_ID set"
           fi
           if [ -n "$PP_SECRET" ]; then
             echo "$PP_SECRET" | npx wrangler secret put PAYPAL_CLIENT_SECRET
+            echo "✅ PAYPAL_CLIENT_SECRET set"
           fi
 
       - name: Deploy Worker
@@ -234,25 +329,28 @@ jobs:
                 "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/workers/routes" \
                 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
                 -H "Content-Type: application/json" \
-                --data "{\"pattern\": \"${CNAME_DOMAIN}/*\", \"script\": \"readzen-api\"}"
+                -d "{\"pattern\": \"${CNAME_DOMAIN}/*\", \"script\": \"readzen-api\"}"
               echo "✅ Worker route set for $CNAME_DOMAIN"
             else
-              echo "⚠️ Zone not found — use workers.dev URL"
+              echo "⚠️ Zone not found for $DOMAIN_ROOT — using workers.dev URL"
             fi
           else
-            echo "ℹ️ No CNAME_HTTPS — using workers.dev"
+            echo "ℹ️ No CNAME_HTTPS secret — using workers.dev"
           fi
 
       - name: Verify deployment
         if: env.DEPLOY_ACTION == 'deploy' || env.DEPLOY_ACTION == 'full-setup-and-deploy'
         run: |
-          sleep 8
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://readzen-api.readori.workers.dev/" || echo "000")
+          echo "Waiting for propagation..."
+          sleep 10
+          HTTP_CODE=$(curl -s -o /tmp/resp.json -w "%{http_code}" "https://readzen-api.readori.workers.dev/" || echo "000")
+          echo "HTTP Status: $HTTP_CODE"
           if [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ Worker is live! (HTTP 200)"
-            curl -s "https://readzen-api.readori.workers.dev/" | jq .
+            echo "✅ Worker is live!"
+            cat /tmp/resp.json | jq . 2>/dev/null || cat /tmp/resp.json
           else
-            echo "⚠️ HTTP $HTTP_CODE — may need propagation time"
+            echo "⚠️ HTTP $HTTP_CODE — may need more propagation time"
+            cat /tmp/resp.json 2>/dev/null
           fi
 
       - name: Post deployment report
@@ -264,9 +362,12 @@ jobs:
             const d1 = '${{ steps.resources.outputs.d1_id }}' || 'N/A';
             const kv = '${{ steps.resources.outputs.kv_id }}' || 'N/A';
             const action = '${{ env.DEPLOY_ACTION }}';
+            const status = '${{ job.status }}';
+            const emoji = status === 'success' ? '✅' : '❌';
             const body = [
-              '## 🚀 Backend Deployment Report',
+              `## ${emoji} Backend Deployment Report`,
               '',
+              `**Status:** ${status}`,
               `**Action:** ${action}`,
               `**Date:** ${new Date().toISOString()}`,
               `**Run:** [${context.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
@@ -283,7 +384,13 @@ jobs:
               '- API: `https://readzen-api.readori.workers.dev/api/v1/`',
               '- Admin: `https://readzen-api.readori.workers.dev/admin`',
               '- Config: `GET /api/v1/config/public`',
-              '- Bootstrap: `POST /api/v1/admin/bootstrap`'
+              '- Bootstrap: `POST /api/v1/admin/bootstrap`',
+              '',
+              '### Required Token Permissions',
+              'If deployment failed, ensure CF_API_TOKEN has:',
+              '- Account > D1 > Edit',
+              '- Account > Workers KV Storage > Edit',
+              '- Account > Cloudflare Workers > Edit',
             ].join('\n');
             await github.rest.issues.createComment({
               owner: 'readori', repo: 'readzen-ci', issue_number: 1, body
