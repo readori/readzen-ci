@@ -7,6 +7,9 @@ on:
   repository_dispatch:
     types: [source-updated]
 
+env:
+  GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:+HeapDumpOnOutOfMemoryError"
+
 jobs:
   build-debug:
     name: Build Debug APK
@@ -36,16 +39,27 @@ jobs:
 
       - name: Build Debug APK
         working-directory: android
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: gradle assembleDebug --no-daemon --stacktrace --info 2>&1 | tail -500
         env:
-          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY || '' }}
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: readzen-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           retention-days: 30
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-logs
+          path: |
+            android/app/build/reports/
+            android/app/build/outputs/logs/
+          retention-days: 7
 
   lint-android:
     name: Android Lint
