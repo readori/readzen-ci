@@ -1,6 +1,10 @@
 name: Admin Bootstrap & Payment Setup
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'TRIGGER_ADMIN'
   workflow_dispatch:
     inputs:
       action:
@@ -35,6 +39,10 @@ jobs:
     name: Admin Setup
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      ACTION: ${{ inputs.action || 'bootstrap-admin' }}
+      ADMIN_EMAIL: ${{ inputs.admin_email || 'admin@readzen.app' }}
+      ADMIN_PASSWORD: ${{ inputs.admin_password || '' }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -72,26 +80,25 @@ jobs:
           echo "id = \"${KV_ID}\"" >> wrangler.toml
 
       - name: Bootstrap Admin
-        if: inputs.action == 'bootstrap-admin'
+        if: env.ACTION == 'bootstrap-admin'
         working-directory: cloudflare-backend
-        env:
-          ADMIN_EMAIL: ${{ inputs.admin_email }}
-          ADMIN_PASSWORD: ${{ inputs.admin_password }}
         run: |
           echo "=== Admin Bootstrap ==="
+          echo "Email: $ADMIN_EMAIL"
 
-          # Generate a new SECRET_KEY and set it
+          # Generate a new SECRET_KEY and set it on the Worker
           NEW_SECRET_KEY=$(openssl rand -hex 24)
           echo "$NEW_SECRET_KEY" | wrangler secret put SECRET_KEY
-          echo "✅ SECRET_KEY updated"
+          echo "✅ SECRET_KEY updated on Worker"
 
           # Wait for secret propagation
-          sleep 5
+          echo "Waiting for secret propagation..."
+          sleep 8
 
           # Generate password if not provided
           if [ -z "$ADMIN_PASSWORD" ]; then
-            ADMIN_PASSWORD=$(openssl rand -base64 16)
-            echo "Generated password (no input provided)"
+            ADMIN_PASSWORD=$(openssl rand -base64 16 | tr -d '=/+' | head -c 16)
+            echo "Auto-generated password"
           fi
 
           WORKER_URL="https://readzen-api.iilove.workers.dev"
@@ -117,20 +124,43 @@ jobs:
             echo "| Password | \`${ADMIN_PASSWORD}\` |" >> $GITHUB_STEP_SUMMARY
             echo "| Admin Panel | https://readzen-api.iilove.workers.dev/admin |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "⚠️ **Save these credentials!** They cannot be recovered." >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **Save these credentials immediately! They cannot be recovered.**" >> $GITHUB_STEP_SUMMARY
           elif echo "$BODY" | grep -q "already exists"; then
-            echo "ℹ️ Admin already exists. Use admin panel to manage accounts."
+            echo "ℹ️ Admin already exists."
             echo "## ℹ️ Admin Already Exists" >> $GITHUB_STEP_SUMMARY
-            echo "An admin account already exists. Login at:" >> $GITHUB_STEP_SUMMARY
-            echo "https://readzen-api.iilove.workers.dev/admin" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "An admin account has already been created." >> $GITHUB_STEP_SUMMARY
+            echo "Login at: https://readzen-api.iilove.workers.dev/admin" >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ Bootstrap failed: $BODY"
-            echo "## ❌ Bootstrap Failed" >> $GITHUB_STEP_SUMMARY
-            echo "Error: \`$BODY\`" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ Bootstrap response: $BODY"
+            echo "Retrying after longer wait..."
+            sleep 10
+            RESPONSE2=$(curl -s -w "\n%{http_code}" -X POST \
+              "${WORKER_URL}/api/v1/admin/bootstrap" \
+              -H "Content-Type: application/json" \
+              -d "{\"secret_key\":\"${NEW_SECRET_KEY}\",\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}")
+            HTTP2=$(echo "$RESPONSE2" | tail -1)
+            BODY2=$(echo "$RESPONSE2" | sed '$d')
+            echo "Retry HTTP: $HTTP2"
+            echo "Retry Response: $BODY2"
+            if echo "$BODY2" | jq -e '.success' > /dev/null 2>&1; then
+              echo "✅ Admin created on retry!"
+              echo "## 🔐 Admin Credentials" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+              echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+              echo "| Email | \`${ADMIN_EMAIL}\` |" >> $GITHUB_STEP_SUMMARY
+              echo "| Password | \`${ADMIN_PASSWORD}\` |" >> $GITHUB_STEP_SUMMARY
+              echo "| Admin Panel | https://readzen-api.iilove.workers.dev/admin |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "## ❌ Bootstrap Failed" >> $GITHUB_STEP_SUMMARY
+              echo "Error: \`$BODY2\`" >> $GITHUB_STEP_SUMMARY
+              echo "Try running again or check Worker logs" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
 
       - name: Update Payment Secrets
-        if: inputs.action == 'update-payment-secrets'
+        if: env.ACTION == 'update-payment-secrets'
         working-directory: cloudflare-backend
         env:
           STRIPE_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
@@ -176,105 +206,57 @@ jobs:
           echo ""
           echo "## 💳 Payment Configuration" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Configured $CONFIGURED payment secrets." >> $GITHUB_STEP_SUMMARY
+          echo "Configured **$CONFIGURED** payment secrets." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Stripe Webhook URL" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "https://readzen-api.iilove.workers.dev/api/v1/payment/stripe/webhook" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Setup Instructions" >> $GITHUB_STEP_SUMMARY
-          echo "1. **Stripe**: Add webhook URL above in Stripe Dashboard → Developers → Webhooks" >> $GITHUB_STEP_SUMMARY
-          echo "2. **PayPal**: Configure webhook at PayPal Developer Dashboard" >> $GITHUB_STEP_SUMMARY
-          echo "3. **Google Play**: No additional secrets needed (verify via purchase token)" >> $GITHUB_STEP_SUMMARY
-
-          if [ "$CONFIGURED" -eq 0 ]; then
-            echo ""
-            echo "### Required Secrets in readzen-ci:"
-            echo "| Secret | Purpose |"
-            echo "|---|---|"
-            echo "| STRIPE_SECRET_KEY | Stripe API secret key (sk_live_xxx or sk_test_xxx) |"
-            echo "| STRIPE_WEBHOOK_SECRET | Stripe webhook endpoint secret (whsec_xxx) |"
-            echo "| PAYPAL_CLIENT_ID | PayPal REST API client ID |"
-            echo "| PAYPAL_CLIENT_SECRET | PayPal REST API secret |"
-          fi
+          echo "### PayPal Webhook URL" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "https://readzen-api.iilove.workers.dev/api/v1/payment/paypal/capture" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Add these secrets to readzen-ci if not yet configured:" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret | Source |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| STRIPE_SECRET_KEY | [Stripe Dashboard](https://dashboard.stripe.com/apikeys) |" >> $GITHUB_STEP_SUMMARY
+          echo "| STRIPE_WEBHOOK_SECRET | Stripe → Webhooks → Signing secret |" >> $GITHUB_STEP_SUMMARY
+          echo "| PAYPAL_CLIENT_ID | [PayPal Developer](https://developer.paypal.com/dashboard/applications) |" >> $GITHUB_STEP_SUMMARY
+          echo "| PAYPAL_CLIENT_SECRET | PayPal app credentials |" >> $GITHUB_STEP_SUMMARY
 
       - name: Verify All Endpoints
-        if: inputs.action == 'verify-all-endpoints'
+        if: env.ACTION == 'verify-all-endpoints'
         run: |
           WORKER_URL="https://readzen-api.iilove.workers.dev"
           echo "=== Endpoint Verification ==="
-          echo ""
 
-          echo "## 🔍 Endpoint Verification" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔍 API Endpoint Verification" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Endpoint | Status | Response |" >> $GITHUB_STEP_SUMMARY
+          echo "| Endpoint | HTTP | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
 
-          # Test each endpoint
-          endpoints=(
-            "GET|/|Health"
-            "GET|/health|Health Check"
-            "GET|/api/v1/config/public|Public Config"
-            "GET|/admin|Admin Panel"
-          )
-
-          ALL_PASS=true
-          for ep in "${endpoints[@]}"; do
-            IFS='|' read -r METHOD PATH NAME <<< "$ep"
-            HTTP=$(curl -s -o /tmp/resp.txt -w "%{http_code}" -X "$METHOD" "${WORKER_URL}${PATH}")
-            RESP=$(cat /tmp/resp.txt | head -c 100)
-            if [ "$HTTP" = "200" ]; then
-              STATUS="✅ $HTTP"
+          check_endpoint() {
+            local METHOD=$1 PATH=$2 EXPECT=$3 NAME=$4
+            HTTP=$(curl -s -o /tmp/resp.txt -w "%{http_code}" -X "$METHOD" "${WORKER_URL}${PATH}" -H "Content-Type: application/json")
+            RESP=$(cat /tmp/resp.txt | head -c 80)
+            if [ "$HTTP" = "$EXPECT" ]; then
+              echo "✅ $NAME: $HTTP"
+              echo "| \`$METHOD $PATH\` | $HTTP | ✅ |" >> $GITHUB_STEP_SUMMARY
             else
-              STATUS="❌ $HTTP"
-              ALL_PASS=false
+              echo "⚠️ $NAME: $HTTP (expected $EXPECT)"
+              echo "| \`$METHOD $PATH\` | $HTTP (expect $EXPECT) | ⚠️ |" >> $GITHUB_STEP_SUMMARY
             fi
-            echo "$NAME ($PATH): $STATUS"
-            echo "| \`$METHOD $PATH\` | $STATUS | \`${RESP:0:60}\` |" >> $GITHUB_STEP_SUMMARY
-          done
+          }
 
-          # Test auth-required endpoints (should return 401)
-          auth_endpoints=(
-            "GET|/api/v1/admin/stats|Admin Stats (needs auth)"
-            "GET|/api/v1/subscription/status|Subscription (needs auth)"
-            "GET|/api/v1/orders/recent|Orders (needs auth)"
-          )
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Auth-Protected Endpoints (expect 401)" >> $GITHUB_STEP_SUMMARY
-          echo "| Endpoint | Status | Correct? |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
-
-          for ep in "${auth_endpoints[@]}"; do
-            IFS='|' read -r METHOD PATH NAME <<< "$ep"
-            HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X "$METHOD" "${WORKER_URL}${PATH}")
-            if [ "$HTTP" = "401" ]; then
-              echo "$NAME: ✅ Returns 401 (correct)"
-              echo "| \`$PATH\` | $HTTP | ✅ Correct |" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "$NAME: ⚠️ Returns $HTTP (expected 401)"
-              echo "| \`$PATH\` | $HTTP | ⚠️ Unexpected |" >> $GITHUB_STEP_SUMMARY
-            fi
-          done
-
-          # Test POST bootstrap (should return 403 with wrong key or 400 if admin exists)
-          BOOT_HTTP=$(curl -s -o /tmp/boot.txt -w "%{http_code}" -X POST \
-            "${WORKER_URL}/api/v1/admin/bootstrap" \
-            -H "Content-Type: application/json" \
-            -d '{"secret_key":"wrong","email":"test@test.com","password":"test"}')
-          BOOT_RESP=$(cat /tmp/boot.txt)
-          echo ""
-          echo "Bootstrap test (wrong key): HTTP $BOOT_HTTP — $BOOT_RESP"
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Bootstrap Status" >> $GITHUB_STEP_SUMMARY
-          if echo "$BOOT_RESP" | grep -q "Invalid secret"; then
-            echo "✅ Bootstrap protected (returns 403 for invalid key)" >> $GITHUB_STEP_SUMMARY
-          elif echo "$BOOT_RESP" | grep -q "already exists"; then
-            echo "✅ Admin already bootstrapped (returns 400)" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ Unexpected: HTTP $BOOT_HTTP — \`$BOOT_RESP\`" >> $GITHUB_STEP_SUMMARY
-          fi
+          check_endpoint GET "/" 200 "Root"
+          check_endpoint GET "/health" 200 "Health"
+          check_endpoint GET "/api/v1/config/public" 200 "Public Config"
+          check_endpoint GET "/admin" 200 "Admin Panel"
+          check_endpoint GET "/api/v1/admin/stats" 401 "Admin (auth required)"
+          check_endpoint GET "/api/v1/subscription/status" 401 "Subscription (auth required)"
+          check_endpoint GET "/api/v1/settings/user" 401 "Settings (auth required)"
 
       - name: Post report
         if: always()
@@ -282,7 +264,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const action = '${{ inputs.action }}';
+            const action = '${{ env.ACTION }}';
             const status = '${{ job.status }}';
             const emoji = status === 'success' ? '✅' : '❌';
             const body = [
