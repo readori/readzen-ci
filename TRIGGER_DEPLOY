@@ -1,1 +1,1 @@
-v4 — redeploy: bootstrap fix (no SECRET_KEY needed for first admin)
+v6 — schema fix: DROP+recreate all tables (adds role column)
