@@ -223,7 +223,7 @@ jobs:
           echo '' >> wrangler.toml
           echo '[vars]' >> wrangler.toml
           echo 'APP_NAME = "ReadZen API"' >> wrangler.toml
-          echo 'APP_VERSION = "2.1.0"' >> wrangler.toml
+          echo 'APP_VERSION = "2.3.0"' >> wrangler.toml
           echo 'CORS_ORIGINS = "https://readzen.app,https://admin.readzen.app"' >> wrangler.toml
           echo 'JWT_ALGORITHM = "HS256"' >> wrangler.toml
           echo 'JWT_EXPIRE_MINUTES = "1440"' >> wrangler.toml
@@ -345,7 +345,6 @@ jobs:
           else
             echo "⚠️ Worker returned HTTP $HTTP_CODE"
             echo "Check Cloudflare Dashboard > Workers > readzen-api for logs"
-            echo "Worker may need workers.dev subdomain enabled in account settings"
           fi
 
       - name: Post deployment report
@@ -383,5 +382,5 @@ jobs:
               `- Bootstrap: \`POST ${workerUrl}/api/v1/admin/bootstrap\``,
             ].join('\n');
             await github.rest.issues.createComment({
-              owner: 'readori', repo: 'readzen-ci', issue_number: 1, body
+              owner: 'readori', repo: 'readzen-ci', issue_number: 2, body
             });

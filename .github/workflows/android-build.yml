@@ -314,7 +314,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: "readori",
               repo: "readzen-ci",
-              issue_number: 1,
+              issue_number: 2,
               body
             });
 
