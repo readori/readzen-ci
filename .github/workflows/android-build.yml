@@ -1,6 +1,8 @@
 name: Android Build
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   repository_dispatch:
     types: [source-updated]
@@ -28,11 +30,15 @@ jobs:
         with:
           gradle-version: '8.5'
 
+      - name: Grant Gradle wrapper permissions
+        working-directory: android
+        run: chmod +x gradlew || true
+
       - name: Build Debug APK
         working-directory: android
         run: gradle assembleDebug --no-daemon --stacktrace
         env:
-          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY || '' }}
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
