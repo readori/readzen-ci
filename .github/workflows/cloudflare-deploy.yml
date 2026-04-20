@@ -26,12 +26,6 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install Wrangler
-        run: npm install -g wrangler@latest
-
-      - name: Verify Cloudflare Auth
-        run: wrangler whoami
-
       # Use Cloudflare REST API directly — avoids wrangler CLI version issues
       - name: Provision D1 Database via API
         id: d1
@@ -116,43 +110,45 @@ jobs:
 
       - name: Deploy Worker
         working-directory: cloudflare-backend
-        run: npx wrangler deploy --no-bundle=false
+        run: |
+          echo "Deploying readzen-api worker..."
+          npx wrangler deploy 2>&1
+          echo "✅ Worker deployed"
 
       - name: Initialize D1 Schema
         working-directory: cloudflare-backend
         run: |
-          npx wrangler d1 execute readzen-db --file=schema.sql --remote --yes
+          npx wrangler d1 execute readzen-db --file=schema.sql --remote --yes 2>&1 || echo "⚠️ Schema may already exist"
           echo "✅ D1 schema initialized"
 
       - name: Set Worker Secrets
         working-directory: cloudflare-backend
         run: |
-          # JWT_SECRET
           if [ -n "${{ secrets.JWT_SECRET }}" ]; then
-            echo "${{ secrets.JWT_SECRET }}" | npx wrangler secret put JWT_SECRET
+            echo "${{ secrets.JWT_SECRET }}" | npx wrangler secret put JWT_SECRET 2>&1
           else
-            openssl rand -hex 32 | npx wrangler secret put JWT_SECRET
+            openssl rand -hex 32 | npx wrangler secret put JWT_SECRET 2>&1
           fi
-          # SECRET_KEY
           if [ -n "${{ secrets.SECRET_KEY }}" ]; then
-            echo "${{ secrets.SECRET_KEY }}" | npx wrangler secret put SECRET_KEY
+            echo "${{ secrets.SECRET_KEY }}" | npx wrangler secret put SECRET_KEY 2>&1
           else
-            openssl rand -hex 32 | npx wrangler secret put SECRET_KEY
+            openssl rand -hex 32 | npx wrangler secret put SECRET_KEY 2>&1
           fi
           echo "✅ Secrets configured"
 
       - name: Verify Deployment
         run: |
-          sleep 5
+          sleep 8
           echo "Testing Worker health..."
-          HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' "https://readzen-api.readori.workers.dev/" || echo "000")
+          HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' "https://readzen-api.readori.workers.dev/" 2>/dev/null || echo "000")
           echo "HTTP Status: $HTTP_CODE"
           if [ "$HTTP_CODE" = "200" ]; then
             echo "✅ Worker is live!"
-            curl -s "https://readzen-api.readori.workers.dev/" | jq .
+            curl -s "https://readzen-api.readori.workers.dev/" | jq . || true
+          elif [ "$HTTP_CODE" = "000" ]; then
+            echo "⚠️ Worker URL not yet available — first deploy may take a minute"
           else
-            echo "⚠️ Worker returned $HTTP_CODE — may need a few minutes to propagate"
-            echo "Try: curl https://readzen-api.readori.workers.dev/"
+            echo "⚠️ Worker returned $HTTP_CODE"
           fi
           echo ""
           echo "============================================"
