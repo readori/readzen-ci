@@ -3,6 +3,8 @@ name: Security Audit
 on:
   push:
     branches: [main]
+    paths:
+      - '.github/**'
 
 permissions:
   contents: read
@@ -21,7 +23,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -48,13 +50,13 @@ jobs:
             echo "$CHANGED"
             AUTHORIZED_USERS="readori"
             if echo "$AUTHORIZED_USERS" | grep -qw "$GH_ACTOR"; then
-              echo "Author is authorized"
+              echo "✅ Author is authorized"
             else
               echo "::error::UNAUTHORIZED modification by $GH_ACTOR"
               exit 1
             fi
           else
-            echo "No CI/security file changes detected"
+            echo "✅ No CI/security file changes detected"
           fi
 
       - name: Scan for hardcoded secrets
@@ -69,7 +71,7 @@ jobs:
             fi
           done
           if [ "$FOUND" = "0" ]; then
-            echo "No hardcoded secrets found"
+            echo "✅ No hardcoded secrets found"
           else
             exit 1
           fi
@@ -93,3 +95,4 @@ jobs:
             fi
           done
           echo "Security issues: $ISSUES"
+          echo "✅ Audit complete"
