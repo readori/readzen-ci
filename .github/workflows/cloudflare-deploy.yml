@@ -24,56 +24,85 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install Wrangler v4
-        run: npm install -g wrangler@4
+      - name: Install Wrangler
+        run: npm install -g wrangler@latest
 
       - name: Verify Cloudflare Auth
         run: wrangler whoami
 
-      - name: Provision D1 Database
+      # Use Cloudflare REST API directly — avoids wrangler CLI version issues
+      - name: Provision D1 Database via API
         id: d1
         run: |
-          echo "Checking D1 databases..."
-          D1_ID=$(wrangler d1 list --json 2>/dev/null | jq -r '.[] | select(.name=="readzen-db") | .uuid' || echo "")
+          echo "Checking for existing D1 database 'readzen-db'..."
+          EXISTING=$(curl -sf \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database" \
+            | jq -r '.result[] | select(.name=="readzen-db") | .uuid')
+
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            echo "D1 already exists: $EXISTING"
+            D1_ID="$EXISTING"
+          else
+            echo "Creating D1 database..."
+            RESP=$(curl -sf -X POST \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"name":"readzen-db"}' \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database")
+            echo "$RESP" | jq .
+            D1_ID=$(echo "$RESP" | jq -r '.result.uuid')
+          fi
 
           if [ -z "$D1_ID" ] || [ "$D1_ID" = "null" ]; then
-            echo "Creating D1 database 'readzen-db'..."
-            OUTPUT=$(wrangler d1 create readzen-db 2>&1)
-            echo "$OUTPUT"
-            D1_ID=$(echo "$OUTPUT" | grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+            echo "::error::Failed to get D1 database ID"
+            exit 1
           fi
 
-          echo "✅ D1 Database ID: $D1_ID"
           echo "d1_id=$D1_ID" >> $GITHUB_OUTPUT
+          echo "✅ D1 Database ID: $D1_ID"
 
-      - name: Provision KV Namespace
+      - name: Provision KV Namespace via API
         id: kv
         run: |
-          echo "Checking KV namespaces..."
-          KV_ID=$(wrangler kv namespace list --json 2>/dev/null | jq -r '.[] | select(.title | test("READZEN_KV")) | .id' || echo "")
+          echo "Checking for existing KV namespace 'READZEN_KV'..."
+          EXISTING=$(curl -sf \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces" \
+            | jq -r '.result[] | select(.title=="READZEN_KV") | .id')
 
-          if [ -z "$KV_ID" ] || [ "$KV_ID" = "null" ]; then
-            echo "Creating KV namespace 'READZEN_KV'..."
-            OUTPUT=$(wrangler kv namespace create READZEN_KV 2>&1)
-            echo "$OUTPUT"
-            KV_ID=$(echo "$OUTPUT" | grep -oP 'id\s*=\s*"\K[^"]+' || echo "")
-            if [ -z "$KV_ID" ]; then
-              KV_ID=$(echo "$OUTPUT" | grep -oP '[0-9a-f]{32}' | head -1)
-            fi
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            echo "KV already exists: $EXISTING"
+            KV_ID="$EXISTING"
+          else
+            echo "Creating KV namespace..."
+            RESP=$(curl -sf -X POST \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"title":"READZEN_KV"}' \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces")
+            echo "$RESP" | jq .
+            KV_ID=$(echo "$RESP" | jq -r '.result.id')
           fi
 
-          echo "✅ KV Namespace ID: $KV_ID"
+          if [ -z "$KV_ID" ] || [ "$KV_ID" = "null" ]; then
+            echo "::error::Failed to get KV namespace ID"
+            exit 1
+          fi
+
           echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
+          echo "✅ KV Namespace ID: $KV_ID"
 
       - name: Patch wrangler.toml with real IDs
         run: |
           cd cloudflare-backend
-          echo "Patching wrangler.toml..."
-          sed -i 's/YOUR_D1_DATABASE_ID/${{ steps.d1.outputs.d1_id }}/g' wrangler.toml
-          sed -i 's/YOUR_KV_NAMESPACE_ID/${{ steps.kv.outputs.kv_id }}/g' wrangler.toml
-          echo "--- wrangler.toml ---"
+          D1_ID="${{ steps.d1.outputs.d1_id }}"
+          KV_ID="${{ steps.kv.outputs.kv_id }}"
+          echo "D1=$D1_ID  KV=$KV_ID"
+          sed -i "s/YOUR_D1_DATABASE_ID/$D1_ID/g" wrangler.toml
+          sed -i "s/YOUR_KV_NAMESPACE_ID/$KV_ID/g" wrangler.toml
+          echo "--- patched wrangler.toml ---"
           cat wrangler.toml
-          echo "---"
 
       - name: Install dependencies
         working-directory: cloudflare-backend
@@ -81,56 +110,51 @@ jobs:
 
       - name: Type check
         working-directory: cloudflare-backend
-        run: npx tsc --noEmit || echo "⚠️ Type check warnings (non-blocking)"
+        run: npx tsc --noEmit 2>&1 || echo "⚠️ Type check warnings (non-blocking)"
 
       - name: Deploy Worker
         working-directory: cloudflare-backend
-        run: npx wrangler deploy
+        run: npx wrangler deploy --no-bundle=false
 
-      - name: Initialize D1 Schema (idempotent)
+      - name: Initialize D1 Schema
         working-directory: cloudflare-backend
         run: |
-          echo "Running D1 schema migration..."
-          npx wrangler d1 execute readzen-db --file=schema.sql --remote
+          npx wrangler d1 execute readzen-db --file=schema.sql --remote --yes
           echo "✅ D1 schema initialized"
 
-      - name: Set JWT Secret
+      - name: Set Worker Secrets
         working-directory: cloudflare-backend
         run: |
+          # JWT_SECRET
           if [ -n "${{ secrets.JWT_SECRET }}" ]; then
             echo "${{ secrets.JWT_SECRET }}" | npx wrangler secret put JWT_SECRET
           else
-            JWT=$(openssl rand -hex 32)
-            echo "$JWT" | npx wrangler secret put JWT_SECRET
-            echo "⚠️ Auto-generated JWT_SECRET. Add it as a GitHub secret for consistency."
+            openssl rand -hex 32 | npx wrangler secret put JWT_SECRET
           fi
-          echo "✅ JWT_SECRET configured"
-
-      - name: Set SECRET_KEY
-        working-directory: cloudflare-backend
-        run: |
+          # SECRET_KEY
           if [ -n "${{ secrets.SECRET_KEY }}" ]; then
             echo "${{ secrets.SECRET_KEY }}" | npx wrangler secret put SECRET_KEY
           else
-            SK=$(openssl rand -hex 32)
-            echo "$SK" | npx wrangler secret put SECRET_KEY
+            openssl rand -hex 32 | npx wrangler secret put SECRET_KEY
           fi
-          echo "✅ SECRET_KEY configured"
+          echo "✅ Secrets configured"
 
       - name: Verify Deployment
         run: |
-          echo "Waiting for Worker to propagate..."
-          sleep 10
-          WORKER_URL=$(npx wrangler deployments list --json 2>/dev/null | jq -r '.[0].url // empty' || echo "")
-          if [ -z "$WORKER_URL" ]; then
-            WORKER_URL="https://readzen-api.$(echo $CLOUDFLARE_ACCOUNT_ID | head -c 8).workers.dev"
+          sleep 5
+          echo "Testing Worker health..."
+          HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' "https://readzen-api.readori.workers.dev/" || echo "000")
+          echo "HTTP Status: $HTTP_CODE"
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Worker is live!"
+            curl -s "https://readzen-api.readori.workers.dev/" | jq .
+          else
+            echo "⚠️ Worker returned $HTTP_CODE — may need a few minutes to propagate"
+            echo "Try: curl https://readzen-api.readori.workers.dev/"
           fi
-          echo "Testing health endpoint..."
-          curl -sf "https://readzen-api.readori.workers.dev/" || curl -sf "https://readzen-api.*.workers.dev/" || echo "⚠️ Health check pending — Worker may need a few minutes to propagate"
           echo ""
           echo "============================================"
-          echo "🎉 Deployment Complete!"
-          echo "============================================"
-          echo "D1 Database: ${{ steps.d1.outputs.d1_id }}"
-          echo "KV Namespace: ${{ steps.kv.outputs.kv_id }}"
+          echo "🎉 Deployment pipeline complete!"
+          echo "D1: ${{ steps.d1.outputs.d1_id }}"
+          echo "KV: ${{ steps.kv.outputs.kv_id }}"
           echo "============================================"
