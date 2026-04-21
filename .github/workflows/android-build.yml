@@ -7,10 +7,12 @@ on:
       - 'TRIGGER_DEPLOY'
       - 'TRIGGER_DIAG'
       - 'TRIGGER_KEYSTORE'
+      - 'TRIGGER_KEYSTORE_COMMIT'
       - '*.md'
       - '.github/workflows/deploy-backend.yml'
       - '.github/workflows/build-diagnostic.yml'
       - '.github/workflows/keystore-init.yml'
+      - '.github/workflows/keystore-commit.yml'
   workflow_dispatch:
     inputs:
       build_type:
@@ -73,26 +75,39 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup persistent keystore
+      - name: Setup persistent keystore (priority: repo file > secret > generate)
         shell: bash {0}
         run: |
           mkdir -p $HOME/.android
           KEYSTORE_PATH="$HOME/.android/readzen-ci.keystore"
-          if [ -n "${{ secrets.CI_KEYSTORE_BASE64 }}" ]; then
+
+          # Priority 1: keystore committed to repo (stable, no Secrets API needed)
+          if [ -f "android/keystore/readzen.keystore.b64" ]; then
+            base64 -d android/keystore/readzen.keystore.b64 > "$KEYSTORE_PATH"
+            echo "✅ Keystore loaded from repo file (stable signature — direct upgrade install OK)"
+            KEYSTORE_ALIAS="readzen-release"
+
+          # Priority 2: secret (legacy path)
+          elif [ -n "${{ secrets.CI_KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.CI_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_PATH"
-            echo "✅ Keystore decoded from secret (consistent signature)"
+            echo "✅ Keystore decoded from CI_KEYSTORE_BASE64 secret"
+            KEYSTORE_ALIAS="readzen-debug"
+
+          # Priority 3: generate fresh (unstable — different signature each run)
           else
-            echo "⚠️ CI_KEYSTORE_BASE64 secret is not set."
-            echo "⚠️ Generating fallback keystore for this run so build can continue."
-            echo "⚠️ APK signature may change between runs; direct upgrade install may fail."
+            echo "⚠️ No stable keystore found — generating temporary keystore"
+            echo "⚠️ Run 'Keystore Commit' workflow once to fix upgrade install issues"
             keytool -genkeypair \
-              -alias readzen-debug \
+              -alias readzen-release \
               -keyalg RSA -keysize 2048 -validity 36500 \
               -keystore "$KEYSTORE_PATH" \
               -storepass readzen2024 -keypass readzen2024 \
               -dname "CN=ReadZen CI, OU=Dev, O=ReadZen, L=SF, ST=CA, C=US"
+            KEYSTORE_ALIAS="readzen-release"
           fi
+
           echo "CI_KEYSTORE_PATH=$KEYSTORE_PATH" >> $GITHUB_ENV
+          echo "KEYSTORE_ALIAS=${KEYSTORE_ALIAS:-readzen-release}" >> $GITHUB_ENV
 
       - name: Setup Gradle
         id: setup_gradle
@@ -191,26 +206,39 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup persistent keystore
+      - name: Setup persistent keystore (priority: repo file > secret > generate)
         shell: bash {0}
         run: |
           mkdir -p $HOME/.android
           KEYSTORE_PATH="$HOME/.android/readzen-ci.keystore"
-          if [ -n "${{ secrets.CI_KEYSTORE_BASE64 }}" ]; then
+
+          # Priority 1: keystore committed to repo (stable, no Secrets API needed)
+          if [ -f "android/keystore/readzen.keystore.b64" ]; then
+            base64 -d android/keystore/readzen.keystore.b64 > "$KEYSTORE_PATH"
+            echo "✅ Keystore loaded from repo file (stable signature — direct upgrade install OK)"
+            KEYSTORE_ALIAS="readzen-release"
+
+          # Priority 2: secret (legacy path)
+          elif [ -n "${{ secrets.CI_KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.CI_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_PATH"
-            echo "✅ Keystore decoded from secret (consistent signature)"
+            echo "✅ Keystore decoded from CI_KEYSTORE_BASE64 secret"
+            KEYSTORE_ALIAS="readzen-debug"
+
+          # Priority 3: generate fresh (unstable — different signature each run)
           else
-            echo "⚠️ CI_KEYSTORE_BASE64 secret is not set."
-            echo "⚠️ Generating fallback keystore for this run so build can continue."
-            echo "⚠️ APK signature may change between runs; direct upgrade install may fail."
+            echo "⚠️ No stable keystore found — generating temporary keystore"
+            echo "⚠️ Run 'Keystore Commit' workflow once to fix upgrade install issues"
             keytool -genkeypair \
-              -alias readzen-debug \
+              -alias readzen-release \
               -keyalg RSA -keysize 2048 -validity 36500 \
               -keystore "$KEYSTORE_PATH" \
               -storepass readzen2024 -keypass readzen2024 \
               -dname "CN=ReadZen CI, OU=Dev, O=ReadZen, L=SF, ST=CA, C=US"
+            KEYSTORE_ALIAS="readzen-release"
           fi
+
           echo "CI_KEYSTORE_PATH=$KEYSTORE_PATH" >> $GITHUB_ENV
+          echo "KEYSTORE_ALIAS=${KEYSTORE_ALIAS:-readzen-release}" >> $GITHUB_ENV
 
       - name: Setup Gradle
         id: setup_gradle
