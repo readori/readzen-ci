@@ -96,13 +96,14 @@ jobs:
           # Priority 3: generate fresh (unstable — different signature each run)
           else
             echo "⚠️ No stable keystore found — generating temporary keystore"
-            echo "⚠️ Run 'Keystore Commit' workflow once to fix upgrade install issues"
+            echo "⚠️ Run 'Generate Keystore' workflow in readzen repo to fix upgrade install issues"
             keytool -genkeypair \
               -alias readzen-release \
               -keyalg RSA -keysize 2048 -validity 36500 \
               -keystore "$KEYSTORE_PATH" \
               -storepass readzen2024 -keypass readzen2024 \
-              -dname "CN=ReadZen CI, OU=Dev, O=ReadZen, L=SF, ST=CA, C=US"
+              -dname "CN=ReadZen CI, OU=Dev, O=ReadZen, L=SF, ST=CA, C=US" \
+              -noprompt
             KEYSTORE_ALIAS="readzen-release"
           fi
 
@@ -227,13 +228,14 @@ jobs:
           # Priority 3: generate fresh (unstable — different signature each run)
           else
             echo "⚠️ No stable keystore found — generating temporary keystore"
-            echo "⚠️ Run 'Keystore Commit' workflow once to fix upgrade install issues"
+            echo "⚠️ Run 'Generate Keystore' workflow in readzen repo to fix upgrade install issues"
             keytool -genkeypair \
               -alias readzen-release \
               -keyalg RSA -keysize 2048 -validity 36500 \
               -keystore "$KEYSTORE_PATH" \
               -storepass readzen2024 -keypass readzen2024 \
-              -dname "CN=ReadZen CI, OU=Dev, O=ReadZen, L=SF, ST=CA, C=US"
+              -dname "CN=ReadZen CI, OU=Dev, O=ReadZen, L=SF, ST=CA, C=US" \
+              -noprompt
             KEYSTORE_ALIAS="readzen-release"
           fi
 
@@ -324,6 +326,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Post to Issue
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -343,12 +346,17 @@ jobs:
               `**Run:** [${context.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
               `**Date:** ${new Date().toISOString()}`,
             ].join("\n");
-            await github.rest.issues.createComment({
-              owner: "readori",
-              repo: "readzen-ci",
-              issue_number: 2,
-              body
-            });
+            try {
+              await github.rest.issues.createComment({
+                owner: "readori",
+                repo: "readzen-ci",
+                issue_number: 5,
+                body
+              });
+              console.log("✅ Build report posted to Issue #5");
+            } catch (err) {
+              console.log(`⚠️ Could not post build report: ${err.message}`);
+            }
 
   lint-android:
     name: Android Lint
