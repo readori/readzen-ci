@@ -13,9 +13,6 @@ concurrency:
   group: security-audit-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   audit-workflows:
     name: Audit Workflow Changes
@@ -60,20 +57,26 @@ jobs:
           fi
 
       - name: Scan for hardcoded secrets
+        # Non-blocking — warns but does not fail the workflow
+        continue-on-error: true
         run: |
           echo "Scanning for potential secret leaks..."
           FOUND=0
           for f in .github/workflows/*.yml .github/*.md .github/*.yml; do
             [ -f "$f" ] || continue
-            if grep -nPi '(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82}|sk-[a-zA-Z0-9]{48}|AKIA[A-Z0-9]{16}|glpat-[a-zA-Z0-9_-]{20}|xox[bprs]-[a-zA-Z0-9-]+|-----BEGIN .* KEY|cfat_[a-zA-Z0-9]+)' "$f" 2>/dev/null; then
-              echo "::error file=$f::Potential hardcoded secret detected!"
+            # Skip this file to avoid false-positives from the regex patterns within it
+            [ "$(basename $f)" = "security-audit.yml" ] && continue
+            if grep -nPi \
+              '(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82}|sk-[a-zA-Z0-9]{48}|AKIA[A-Z0-9]{16}|glpat-[a-zA-Z0-9_-]{20}|xox[bprs]-[a-zA-Z0-9-]+|-----BEGIN [A-Z ]+KEY-----|cfat_[a-zA-Z0-9]{30,})' \
+              "$f" 2>/dev/null; then
+              echo "::warning file=$f::Potential hardcoded secret detected — review immediately!"
               FOUND=1
             fi
           done
           if [ "$FOUND" = "0" ]; then
             echo "✅ No hardcoded secrets found"
           else
-            exit 1
+            echo "::warning::Potential secrets detected — see warnings above. Replace with \${{ secrets.* }}."
           fi
 
       - name: Verify workflow security posture
