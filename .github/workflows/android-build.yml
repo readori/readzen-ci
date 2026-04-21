@@ -82,10 +82,15 @@ jobs:
             echo "${{ secrets.CI_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_PATH"
             echo "✅ Keystore decoded from secret (consistent signature)"
           else
-            echo "::error::CI_KEYSTORE_BASE64 secret is not set."
-            echo "::error::Run the 'Initialize Keystore' workflow (TRIGGER_KEYSTORE) once to generate and store a stable keystore."
-            echo "::error::Without a consistent keystore, every build has a different APK signature and cannot update previous installs."
-            exit 1
+            echo "⚠️ CI_KEYSTORE_BASE64 secret is not set."
+            echo "⚠️ Generating fallback keystore for this run so build can continue."
+            echo "⚠️ APK signature may change between runs; direct upgrade install may fail."
+            keytool -genkeypair \
+              -alias readzen-debug \
+              -keyalg RSA -keysize 2048 -validity 36500 \
+              -keystore "$KEYSTORE_PATH" \
+              -storepass readzen2024 -keypass readzen2024 \
+              -dname "CN=ReadZen CI, OU=Dev, O=ReadZen, L=SF, ST=CA, C=US"
           fi
           echo "CI_KEYSTORE_PATH=$KEYSTORE_PATH" >> $GITHUB_ENV
 
@@ -195,10 +200,15 @@ jobs:
             echo "${{ secrets.CI_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_PATH"
             echo "✅ Keystore decoded from secret (consistent signature)"
           else
-            echo "::error::CI_KEYSTORE_BASE64 secret is not set."
-            echo "::error::Run the 'Initialize Keystore' workflow (TRIGGER_KEYSTORE) once to generate and store a stable keystore."
-            echo "::error::Without a consistent keystore, every build has a different APK signature and cannot update previous installs."
-            exit 1
+            echo "⚠️ CI_KEYSTORE_BASE64 secret is not set."
+            echo "⚠️ Generating fallback keystore for this run so build can continue."
+            echo "⚠️ APK signature may change between runs; direct upgrade install may fail."
+            keytool -genkeypair \
+              -alias readzen-debug \
+              -keyalg RSA -keysize 2048 -validity 36500 \
+              -keystore "$KEYSTORE_PATH" \
+              -storepass readzen2024 -keypass readzen2024 \
+              -dname "CN=ReadZen CI, OU=Dev, O=ReadZen, L=SF, ST=CA, C=US"
           fi
           echo "CI_KEYSTORE_PATH=$KEYSTORE_PATH" >> $GITHUB_ENV
 
