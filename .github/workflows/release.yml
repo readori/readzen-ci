@@ -17,7 +17,6 @@ concurrency:
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:+HeapDumpOnOutOfMemoryError"
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-release:
@@ -26,23 +25,59 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout source from readzen
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           repository: readori/readzen
           token: ${{ secrets.READZEN_PAT }}
           persist-credentials: false
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
+        id: setup_gradle
+        continue-on-error: true
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.5'
           cache-disabled: true
+
+      - name: Fallback Gradle install
+        if: steps.setup_gradle.outcome == 'failure'
+        run: |
+          echo "Gradle action failed, installing manually..."
+          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip || {
+            echo "Gradle CDN failed, trying mirror..."
+            curl -sL "https://downloads.gradle-dn.com/distributions/gradle-8.5-bin.zip" -o gradle.zip
+          }
+          unzip -q gradle.zip -d /opt
+          echo "/opt/gradle-8.5/bin" >> $GITHUB_PATH
+
+      - name: Setup Keystore
+        run: |
+          # Priority 1: repo-committed stable keystore
+          if [ -f "android/keystore/readzen.keystore.b64" ]; then
+            base64 -d android/keystore/readzen.keystore.b64 > /tmp/readzen.keystore
+            echo "CI_KEYSTORE_PATH=/tmp/readzen.keystore" >> $GITHUB_ENV
+            echo "KEYSTORE_ALIAS=readzen-release" >> $GITHUB_ENV
+            echo "✅ Using repo-committed stable keystore"
+          # Priority 2: secret-provided keystore
+          elif [ -n "${{ secrets.CI_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.CI_KEYSTORE_BASE64 }}" | base64 -d > /tmp/readzen.keystore
+            echo "CI_KEYSTORE_PATH=/tmp/readzen.keystore" >> $GITHUB_ENV
+            echo "KEYSTORE_ALIAS=readzen-release" >> $GITHUB_ENV
+            echo "✅ Using CI_KEYSTORE_BASE64 secret keystore"
+          else
+            echo "⚠️ No stable keystore — generating temporary one"
+            keytool -genkeypair -alias readzen-release -keyalg RSA -keysize 2048 -validity 36500 \
+              -keystore /tmp/readzen.keystore -storepass readzen2024 -keypass readzen2024 \
+              -dname "CN=ReadZen CI, OU=Dev, O=ReadZen, L=SF, ST=CA, C=US" -noprompt
+            echo "CI_KEYSTORE_PATH=/tmp/readzen.keystore" >> $GITHUB_ENV
+            echo "KEYSTORE_ALIAS=readzen-release" >> $GITHUB_ENV
+          fi
 
       - name: Generate Gradle Wrapper
         working-directory: android
@@ -68,10 +103,9 @@ jobs:
           fi
           APK_SIZE=$(stat -c%s "$APK_PATH")
           echo "✅ Release APK: $APK_PATH ($APK_SIZE bytes)"
-          echo "APK_NAME=readzen-${{ github.event.inputs.version }}.apk" >> $GITHUB_ENV
 
       - name: Upload Release APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: readzen-release-${{ github.event.inputs.version }}
           path: android/app/build/outputs/apk/release/*.apk
@@ -79,7 +113,7 @@ jobs:
 
       - name: Upload build logs on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: release-build-failure-logs
           path: |
@@ -93,14 +127,14 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout source from readzen
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           repository: readori/readzen
           token: ${{ secrets.READZEN_PAT }}
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
           node-version: '22'
 
