@@ -43,14 +43,14 @@ jobs:
       CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - name: Checkout source from readzen
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           repository: readori/readzen
           token: ${{ secrets.READZEN_PAT }}
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
           node-version: '22'
 
@@ -161,6 +161,9 @@ EOF
           STRIPE_WH_VAL: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           PAYPAL_ID_VAL: ${{ secrets.PAYPAL_CLIENT_ID }}
           PAYPAL_SECRET_VAL: ${{ secrets.PAYPAL_CLIENT_SECRET }}
+          # CORS_ORIGINS: comma-separated list of allowed origins
+          # web.heiqiba.com is the primary domain; add more if needed
+          CORS_ORIGINS_VAL: ${{ secrets.CORS_ORIGINS || 'https://web.heiqiba.com' }}
         run: |
           # Core secrets
           if [ -n "$JWT_SECRET_VAL" ]; then
@@ -173,6 +176,11 @@ EOF
           else
             openssl rand -hex 32 | npx wrangler secret put SECRET_KEY 2>&1
           fi
+
+          # CORS origins — always set to ensure correct origins are allowed
+          echo "$CORS_ORIGINS_VAL" | npx wrangler secret put CORS_ORIGINS 2>&1
+          echo "✅ CORS_ORIGINS set to: $CORS_ORIGINS_VAL"
+
           # Payment secrets (optional)
           if [ -n "$STRIPE_KEY_VAL" ]; then
             echo "$STRIPE_KEY_VAL" | npx wrangler secret put STRIPE_SECRET_KEY 2>&1
@@ -195,7 +203,6 @@ EOF
           CNAME_DOMAIN: ${{ secrets.CNAME_HTTPS }}
         run: |
           echo "Custom domain: $CNAME_DOMAIN"
-          # Verify worker is accessible via custom domain
           sleep 5
           HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' "https://$CNAME_DOMAIN/" 2>/dev/null || echo "000")
           echo "Custom domain response: $HTTP_CODE"
@@ -203,17 +210,26 @@ EOF
             echo "✅ Custom domain is live: https://$CNAME_DOMAIN"
           else
             echo "::warning::Custom domain may need DNS configuration: $CNAME_DOMAIN"
-            echo "Point CNAME to readzen-api.readori.workers.dev"
+            echo "Point CNAME to readzen-api.iilove.workers.dev"
           fi
 
       - name: Verify Deployment
+        env:
+          CNAME_DOMAIN: ${{ secrets.CNAME_HTTPS }}
         run: |
           sleep 8
-          HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' "https://readzen-api.readori.workers.dev/" 2>/dev/null || echo "000")
-          RESP=$(curl -sf "https://readzen-api.readori.workers.dev/" 2>/dev/null || echo "{}")
+          # Check primary worker URL
+          PRIMARY_URL="https://readzen-api.iilove.workers.dev/"
+          HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' "$PRIMARY_URL" 2>/dev/null || echo "000")
+          RESP=$(curl -sf "$PRIMARY_URL" 2>/dev/null || echo "{}")
           echo "Worker response ($HTTP_CODE): $RESP"
           if [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ Worker is live and healthy"
+            echo "✅ Worker is live: $PRIMARY_URL"
           else
-            echo "::warning::Worker returned HTTP $HTTP_CODE"
+            echo "::warning::Worker returned HTTP $HTTP_CODE at $PRIMARY_URL"
+          fi
+          # Also check custom domain if configured
+          if [ -n "$CNAME_DOMAIN" ]; then
+            HTTP2=$(curl -so /dev/null -w '%{http_code}' "https://$CNAME_DOMAIN/" 2>/dev/null || echo "000")
+            echo "Custom domain ($CNAME_DOMAIN) response: $HTTP2"
           fi
