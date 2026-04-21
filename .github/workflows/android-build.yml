@@ -2,42 +2,44 @@ name: Android Build
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths-ignore:
-      - 'TRIGGER_DEPLOY'
-      - 'TRIGGER_DIAG'
-      - 'TRIGGER_KEYSTORE'
-      - 'TRIGGER_KEYSTORE_COMMIT'
-      - '*.md'
-      - '.github/workflows/deploy-backend.yml'
-      - '.github/workflows/build-diagnostic.yml'
-      - '.github/workflows/keystore-init.yml'
-      - '.github/workflows/keystore-commit.yml'
+      - "TRIGGER_DEPLOY"
+      - "TRIGGER_DIAG"
+      - "TRIGGER_KEYSTORE"
+      - "TRIGGER_KEYSTORE_COMMIT"
+      - "TRIGGER_GENERATE_KEYSTORE"
+      - "*.md"
+      - ".github/workflows/deploy-backend.yml"
+      - ".github/workflows/build-diagnostic.yml"
+      - ".github/workflows/keystore-init.yml"
+      - ".github/workflows/keystore-commit.yml"
+      - ".github/workflows/cloudflare-deploy.yml"
   workflow_dispatch:
     inputs:
       build_type:
-        description: 'Build type'
+        description: "Build type"
         required: false
-        default: 'debug'
+        default: "debug"
         type: choice
         options:
           - debug
           - release
   repository_dispatch:
-    types: [source-updated]
+    types:
+      - source-updated
 
 permissions:
   contents: read
-  actions: read
   issues: write
 
 concurrency:
-  group: android-build-${{ github.ref }}
+  group: "android-build-${{ github.ref }}"
   cancel-in-progress: true
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:+HeapDumpOnOutOfMemoryError"
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   verify-caller:
@@ -58,7 +60,7 @@ jobs:
     name: Build Debug APK
     needs: verify-caller
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     outputs:
       status: ${{ steps.report.outputs.status }}
     steps:
@@ -72,31 +74,23 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: "17"
+          distribution: "temurin"
 
-      - name: Setup persistent keystore (priority: repo file > secret > generate)
-        shell: bash {0}
+      - name: Setup keystore
         run: |
           mkdir -p $HOME/.android
           KEYSTORE_PATH="$HOME/.android/readzen-ci.keystore"
-
-          # Priority 1: keystore committed to repo (stable, no Secrets API needed)
           if [ -f "android/keystore/readzen.keystore.b64" ]; then
             base64 -d android/keystore/readzen.keystore.b64 > "$KEYSTORE_PATH"
-            echo "✅ Keystore loaded from repo file (stable signature — direct upgrade install OK)"
+            echo "Loaded keystore from repo file"
             KEYSTORE_ALIAS="readzen-release"
-
-          # Priority 2: secret (legacy path)
           elif [ -n "${{ secrets.CI_KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.CI_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_PATH"
-            echo "✅ Keystore decoded from CI_KEYSTORE_BASE64 secret"
-            KEYSTORE_ALIAS="readzen-debug"
-
-          # Priority 3: generate fresh (unstable — different signature each run)
+            echo "Loaded keystore from secret"
+            KEYSTORE_ALIAS="readzen-release"
           else
-            echo "⚠️ No stable keystore found — generating temporary keystore"
-            echo "⚠️ Run 'Generate Keystore' workflow in readzen repo to fix upgrade install issues"
+            echo "Generating temporary keystore"
             keytool -genkeypair \
               -alias readzen-release \
               -keyalg RSA -keysize 2048 -validity 36500 \
@@ -106,23 +100,21 @@ jobs:
               -noprompt
             KEYSTORE_ALIAS="readzen-release"
           fi
-
           echo "CI_KEYSTORE_PATH=$KEYSTORE_PATH" >> $GITHUB_ENV
-          echo "KEYSTORE_ALIAS=${KEYSTORE_ALIAS:-readzen-release}" >> $GITHUB_ENV
+          echo "KEYSTORE_ALIAS=$KEYSTORE_ALIAS" >> $GITHUB_ENV
 
       - name: Setup Gradle
         id: setup_gradle
         continue-on-error: true
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.5'
+          gradle-version: "8.5"
           cache-disabled: true
 
       - name: Fallback Gradle install
         if: steps.setup_gradle.outcome == 'failure'
         run: |
-          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip || \
-          curl -sL "https://downloads.gradle-dn.com/distributions/gradle-8.5-bin.zip" -o gradle.zip
+          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip
           unzip -q gradle.zip -d /opt
           echo "/opt/gradle-8.5/bin" >> $GITHUB_PATH
 
@@ -135,28 +127,15 @@ jobs:
       - name: Build Debug APK
         id: build
         working-directory: android
-        shell: bash {0}
         run: |
           ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log
           EXIT=${PIPESTATUS[0]}
           echo "exit_code=$EXIT" >> $GITHUB_OUTPUT
           if [ $EXIT -ne 0 ]; then
-            echo "ERRORS:" >> build-errors.txt
-            grep -E "^e:|error:|FAILURE|Unresolved" build.log | head -30 >> build-errors.txt 2>/dev/null || true
-            echo "---TAIL---" >> build-errors.txt
-            tail -30 build.log >> build-errors.txt 2>/dev/null || true
+            grep -E "^e:|error:|FAILURE|Exception" build.log | head -40 > build-errors.txt || true
+            tail -50 build.log >> build-errors.txt || true
           fi
           exit $EXIT
-
-      - name: Verify and upload APK
-        if: success()
-        id: apk
-        run: |
-          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' | head -1)
-          if [ -z "$APK" ]; then exit 1; fi
-          SIZE=$(stat -c%s "$APK")
-          echo "size=$SIZE" >> $GITHUB_OUTPUT
-          echo "✅ APK: $APK ($((SIZE/1024)) KB)"
 
       - name: Upload Debug APK
         if: success()
@@ -170,7 +149,6 @@ jobs:
       - name: Report result
         id: report
         if: always()
-        shell: bash {0}
         run: |
           if [ "${{ steps.build.outputs.exit_code }}" = "0" ]; then
             echo "status=success" >> $GITHUB_OUTPUT
@@ -182,15 +160,17 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-logs
-          path: android/build*.log
-          retention-days: 1
+          name: debug-build-logs
+          path: |
+            android/build.log
+            android/build-errors.txt
+          retention-days: 3
 
   build-release:
     name: Build Release APK
     needs: verify-caller
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     outputs:
       status: ${{ steps.report.outputs.status }}
     steps:
@@ -204,31 +184,23 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: "17"
+          distribution: "temurin"
 
-      - name: Setup persistent keystore (priority: repo file > secret > generate)
-        shell: bash {0}
+      - name: Setup keystore
         run: |
           mkdir -p $HOME/.android
           KEYSTORE_PATH="$HOME/.android/readzen-ci.keystore"
-
-          # Priority 1: keystore committed to repo (stable, no Secrets API needed)
           if [ -f "android/keystore/readzen.keystore.b64" ]; then
             base64 -d android/keystore/readzen.keystore.b64 > "$KEYSTORE_PATH"
-            echo "✅ Keystore loaded from repo file (stable signature — direct upgrade install OK)"
+            echo "Loaded keystore from repo file"
             KEYSTORE_ALIAS="readzen-release"
-
-          # Priority 2: secret (legacy path)
           elif [ -n "${{ secrets.CI_KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.CI_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_PATH"
-            echo "✅ Keystore decoded from CI_KEYSTORE_BASE64 secret"
-            KEYSTORE_ALIAS="readzen-debug"
-
-          # Priority 3: generate fresh (unstable — different signature each run)
+            echo "Loaded keystore from secret"
+            KEYSTORE_ALIAS="readzen-release"
           else
-            echo "⚠️ No stable keystore found — generating temporary keystore"
-            echo "⚠️ Run 'Generate Keystore' workflow in readzen repo to fix upgrade install issues"
+            echo "Generating temporary keystore"
             keytool -genkeypair \
               -alias readzen-release \
               -keyalg RSA -keysize 2048 -validity 36500 \
@@ -238,23 +210,21 @@ jobs:
               -noprompt
             KEYSTORE_ALIAS="readzen-release"
           fi
-
           echo "CI_KEYSTORE_PATH=$KEYSTORE_PATH" >> $GITHUB_ENV
-          echo "KEYSTORE_ALIAS=${KEYSTORE_ALIAS:-readzen-release}" >> $GITHUB_ENV
+          echo "KEYSTORE_ALIAS=$KEYSTORE_ALIAS" >> $GITHUB_ENV
 
       - name: Setup Gradle
         id: setup_gradle
         continue-on-error: true
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.5'
+          gradle-version: "8.5"
           cache-disabled: true
 
       - name: Fallback Gradle install
         if: steps.setup_gradle.outcome == 'failure'
         run: |
-          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip || \
-          curl -sL "https://downloads.gradle-dn.com/distributions/gradle-8.5-bin.zip" -o gradle.zip
+          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip
           unzip -q gradle.zip -d /opt
           echo "/opt/gradle-8.5/bin" >> $GITHUB_PATH
 
@@ -267,28 +237,15 @@ jobs:
       - name: Build Release APK
         id: build
         working-directory: android
-        shell: bash {0}
         run: |
           ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
           EXIT=${PIPESTATUS[0]}
           echo "exit_code=$EXIT" >> $GITHUB_OUTPUT
           if [ $EXIT -ne 0 ]; then
-            echo "ERRORS:" >> build-errors.txt
-            grep -E "^e:|error:|FAILURE|Unresolved" build.log | head -30 >> build-errors.txt 2>/dev/null || true
-            echo "---TAIL---" >> build-errors.txt
-            tail -30 build.log >> build-errors.txt 2>/dev/null || true
+            grep -E "^e:|error:|FAILURE|Exception" build.log | head -40 > build-errors.txt || true
+            tail -50 build.log >> build-errors.txt || true
           fi
           exit $EXIT
-
-      - name: Verify and upload APK
-        if: success()
-        id: apk
-        run: |
-          APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
-          if [ -z "$APK" ]; then exit 1; fi
-          SIZE=$(stat -c%s "$APK")
-          echo "size=$SIZE" >> $GITHUB_OUTPUT
-          echo "✅ APK: $APK ($((SIZE/1024)) KB)"
 
       - name: Upload Release APK
         if: success()
@@ -302,7 +259,6 @@ jobs:
       - name: Report result
         id: report
         if: always()
-        shell: bash {0}
         run: |
           if [ "${{ steps.build.outputs.exit_code }}" = "0" ]; then
             echo "status=success" >> $GITHUB_OUTPUT
@@ -314,13 +270,17 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: release-logs
-          path: android/build*.log
-          retention-days: 1
+          name: release-build-logs
+          path: |
+            android/build.log
+            android/build-errors.txt
+          retention-days: 3
 
   post-results:
     name: Post Build Results
-    needs: [build-debug, build-release]
+    needs:
+      - build-debug
+      - build-release
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -338,8 +298,8 @@ jobs:
             const body = [
               "## Android Build Report",
               "",
-              `| Build | Status |`,
-              `|-------|--------|`,
+              "| Build | Status |",
+              "|-------|--------|",
               `| Debug | ${debugEmoji} ${debugStatus} |`,
               `| Release | ${releaseEmoji} ${releaseStatus} |`,
               "",
@@ -353,16 +313,15 @@ jobs:
                 issue_number: 5,
                 body
               });
-              console.log("✅ Build report posted to Issue #5");
             } catch (err) {
-              console.log(`⚠️ Could not post build report: ${err.message}`);
+              console.log("Could not post build report: " + err.message);
             }
 
   lint-android:
     name: Android Lint
     needs: verify-caller
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -374,22 +333,21 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: "17"
+          distribution: "temurin"
 
       - name: Setup Gradle
         id: setup_gradle
         continue-on-error: true
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.5'
+          gradle-version: "8.5"
           cache-disabled: true
 
       - name: Fallback Gradle install
         if: steps.setup_gradle.outcome == 'failure'
         run: |
-          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip || \
-          curl -sL "https://downloads.gradle-dn.com/distributions/gradle-8.5-bin.zip" -o gradle.zip
+          curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o gradle.zip
           unzip -q gradle.zip -d /opt
           echo "/opt/gradle-8.5/bin" >> $GITHUB_PATH
 
