@@ -10,12 +10,15 @@ on:
       - "TRIGGER_KEYSTORE"
       - "TRIGGER_KEYSTORE_COMMIT"
       - "TRIGGER_GENERATE_KEYSTORE"
+      - "TRIGGER_OUTPUT_KEYSTORE"
+      - "TRIGGER_STABLE_BUILD"
       - "*.md"
       - ".github/workflows/deploy-backend.yml"
       - ".github/workflows/build-diagnostic.yml"
       - ".github/workflows/keystore-init.yml"
       - ".github/workflows/keystore-commit.yml"
       - ".github/workflows/cloudflare-deploy.yml"
+      - ".github/workflows/output-keystore.yml"
   workflow_dispatch:
     inputs:
       build_type:
