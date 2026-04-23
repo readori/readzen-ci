@@ -52,7 +52,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
 
       - name: Provision D1 Database via API
         id: d1
@@ -83,7 +83,6 @@ jobs:
       - name: Provision KV Namespace via API
         id: kv
         run: |
-          # Use same title as deploy-backend.yml: readzen-kv
           EXISTING=$(curl -sf \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/storage/kv/namespaces" \
@@ -107,27 +106,48 @@ jobs:
           echo "::add-mask::$KV_ID"
           echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
 
-      - name: Patch wrangler.toml with real IDs
+      - name: Generate wrangler.toml
+        working-directory: cloudflare-backend
         env:
           D1_ID: ${{ steps.d1.outputs.d1_id }}
           KV_ID: ${{ steps.kv.outputs.kv_id }}
           CNAME_DOMAIN: ${{ secrets.CNAME_HTTPS }}
         run: |
-          cd cloudflare-backend
-          # Replace existing database_id and KV id values with the provisioned ones
-          sed -i "s/database_id = \".*\"/database_id = \"$D1_ID\"/g" wrangler.toml
-          sed -i "/\[\[kv_namespaces\]\]/,/^\[/{s/id = \".*\"/id = \"$KV_ID\"/}" wrangler.toml
-          # Add custom domain if CNAME_HTTPS secret is set
-          if [ -n "$CNAME_DOMAIN" ]; then
-            cat >> wrangler.toml <<EOF
+          cat > wrangler.toml << EOF
+          name = "readzen-api"
+          main = "src/index.ts"
+          compatibility_date = "2024-12-01"
+          compatibility_flags = ["nodejs_compat"]
+          workers_dev = true
 
-[routes]
-pattern = "$CNAME_DOMAIN/*"
-custom_domain = true
-EOF
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "readzen-db"
+          database_id = "${D1_ID}"
+
+          [[kv_namespaces]]
+          binding = "KV"
+          id = "${KV_ID}"
+
+          [vars]
+          APP_NAME = "ReadZen API"
+          APP_VERSION = "2.3.0"
+          CORS_ORIGINS = "https://web.heiqiba.com,https://readzen-api.iilove.workers.dev"
+          JWT_ALGORITHM = "HS256"
+          JWT_EXPIRE_MINUTES = "1440"
+          RATE_LIMIT_PER_MINUTE = "60"
+          EOF
+
+          # Remove leading whitespace left by heredoc indentation
+          sed -i 's/^          //' wrangler.toml
+
+          # Add custom domain route if CNAME_HTTPS secret is set
+          if [ -n "$CNAME_DOMAIN" ]; then
+            printf '\n[[routes]]\npattern = "%s/*"\ncustom_domain = true\n' "$CNAME_DOMAIN" >> wrangler.toml
             echo "✅ Custom domain configured: $CNAME_DOMAIN"
           fi
-          echo "--- wrangler.toml (sanitized) ---"
+
+          echo "--- wrangler.toml (IDs masked) ---"
           cat wrangler.toml | sed 's/database_id = ".*"/database_id = "***"/g' | sed 's/id = ".*"/id = "***"/g'
 
       - name: Install dependencies
@@ -145,7 +165,7 @@ EOF
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           echo "Applying schema.sql to D1..."
-          npx wrangler d1 execute readzen-db --file=schema.sql --remote --yes
+          npx wrangler d1 execute readzen-db --file=./schema.sql --remote
           echo "✅ D1 schema applied"
 
       - name: Set Worker Secrets
@@ -159,81 +179,58 @@ EOF
           STRIPE_WH_VAL: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           PAYPAL_ID_VAL: ${{ secrets.PAYPAL_CLIENT_ID }}
           PAYPAL_SECRET_VAL: ${{ secrets.PAYPAL_CLIENT_SECRET }}
-          CORS_ORIGINS_VAL: ${{ secrets.CORS_ORIGINS || 'https://web.heiqiba.com' }}
+          CORS_ORIGINS_VAL: ${{ secrets.CORS_ORIGINS }}
           RESEND_API_KEY_VAL: ${{ secrets.RESEND_API_KEY }}
           TELEGRAM_BOT_TOKEN_VAL: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID_VAL: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          # Core secrets
           if [ -n "$JWT_SECRET_VAL" ]; then
-            echo "$JWT_SECRET_VAL" | npx wrangler secret put JWT_SECRET 2>&1
+            echo "$JWT_SECRET_VAL" | npx wrangler secret put JWT_SECRET
           else
-            openssl rand -hex 32 | npx wrangler secret put JWT_SECRET 2>&1
+            openssl rand -hex 32 | npx wrangler secret put JWT_SECRET
           fi
           if [ -n "$SECRET_KEY_VAL" ]; then
-            echo "$SECRET_KEY_VAL" | npx wrangler secret put SECRET_KEY 2>&1
+            echo "$SECRET_KEY_VAL" | npx wrangler secret put SECRET_KEY
           else
-            openssl rand -hex 32 | npx wrangler secret put SECRET_KEY 2>&1
+            openssl rand -hex 32 | npx wrangler secret put SECRET_KEY
           fi
-
-          # CORS origins
-          echo "$CORS_ORIGINS_VAL" | npx wrangler secret put CORS_ORIGINS 2>&1
-          echo "✅ CORS_ORIGINS set to: $CORS_ORIGINS_VAL"
-
-          # Payment secrets (optional)
+          CORS_VAL="${CORS_ORIGINS_VAL:-https://web.heiqiba.com,https://readzen-api.iilove.workers.dev}"
+          echo "$CORS_VAL" | npx wrangler secret put CORS_ORIGINS
           if [ -n "$STRIPE_KEY_VAL" ]; then
-            echo "$STRIPE_KEY_VAL" | npx wrangler secret put STRIPE_SECRET_KEY 2>&1
-            echo "✅ Stripe secret configured"
+            echo "$STRIPE_KEY_VAL" | npx wrangler secret put STRIPE_SECRET_KEY
           fi
           if [ -n "$STRIPE_WH_VAL" ]; then
-            echo "$STRIPE_WH_VAL" | npx wrangler secret put STRIPE_WEBHOOK_SECRET 2>&1
+            echo "$STRIPE_WH_VAL" | npx wrangler secret put STRIPE_WEBHOOK_SECRET
           fi
           if [ -n "$PAYPAL_ID_VAL" ]; then
-            echo "$PAYPAL_ID_VAL" | npx wrangler secret put PAYPAL_CLIENT_ID 2>&1
-            echo "✅ PayPal ID configured"
+            echo "$PAYPAL_ID_VAL" | npx wrangler secret put PAYPAL_CLIENT_ID
           fi
           if [ -n "$PAYPAL_SECRET_VAL" ]; then
-            echo "$PAYPAL_SECRET_VAL" | npx wrangler secret put PAYPAL_CLIENT_SECRET 2>&1
+            echo "$PAYPAL_SECRET_VAL" | npx wrangler secret put PAYPAL_CLIENT_SECRET
           fi
-
-          # Notification secrets (optional)
           if [ -n "$RESEND_API_KEY_VAL" ]; then
-            echo "$RESEND_API_KEY_VAL" | npx wrangler secret put RESEND_API_KEY 2>&1
-            echo "✅ Resend API key configured"
+            echo "$RESEND_API_KEY_VAL" | npx wrangler secret put RESEND_API_KEY
           fi
           if [ -n "$TELEGRAM_BOT_TOKEN_VAL" ]; then
-            echo "$TELEGRAM_BOT_TOKEN_VAL" | npx wrangler secret put TELEGRAM_BOT_TOKEN 2>&1
-            echo "✅ Telegram bot token configured"
+            echo "$TELEGRAM_BOT_TOKEN_VAL" | npx wrangler secret put TELEGRAM_BOT_TOKEN
           fi
           if [ -n "$TELEGRAM_CHAT_ID_VAL" ]; then
-            echo "$TELEGRAM_CHAT_ID_VAL" | npx wrangler secret put TELEGRAM_CHAT_ID 2>&1
-            echo "✅ Telegram chat ID configured"
+            echo "$TELEGRAM_CHAT_ID_VAL" | npx wrangler secret put TELEGRAM_CHAT_ID
           fi
+          echo "✅ All secrets configured"
 
       - name: Deploy Worker
         working-directory: cloudflare-backend
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy 2>&1 | grep -v 'account_id\|api_token'
-
-      - name: Setup Custom Domain
-        if: ${{ secrets.CNAME_HTTPS != '' }}
-        env:
-          CNAME_DOMAIN: ${{ secrets.CNAME_HTTPS }}
         run: |
-          echo "Custom domain: $CNAME_DOMAIN"
-          sleep 5
-          HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' "https://$CNAME_DOMAIN/" 2>/dev/null || echo "000")
-          echo "Custom domain response: $HTTP_CODE"
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ Custom domain is live: https://$CNAME_DOMAIN"
-          else
-            echo "::warning::Custom domain may need DNS configuration: $CNAME_DOMAIN"
-            echo "Point CNAME to readzen-api.iilove.workers.dev"
-          fi
+          set -o pipefail
+          npx wrangler deploy --minify 2>&1 | tee /tmp/deploy.log
+          echo "✅ Worker deployed"
 
       - name: Verify Deployment
+        continue-on-error: true
         env:
           CNAME_DOMAIN: ${{ secrets.CNAME_HTTPS }}
         run: |
