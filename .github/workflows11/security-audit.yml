@@ -1,0 +1,101 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit-workflows:
+    name: Audit Workflow Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check for unauthorized workflow changes
+        env:
+          GH_ACTOR: ${{ github.actor }}
+          GH_SHA: ${{ github.sha }}
+          GH_EVENT: ${{ github.event_name }}
+          GH_BEFORE: ${{ github.event.before }}
+        run: |
+          echo "=== Security Audit ==="
+          echo "Commit: $GH_SHA"
+          echo "Author: $GH_ACTOR"
+          echo "Event: $GH_EVENT"
+          echo ""
+          if [ -n "$GH_BEFORE" ] && [ "$GH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            CHANGED=$(git diff --name-only "$GH_BEFORE" "$GH_SHA" 2>/dev/null | grep '.github/' || true)
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | grep '.github/' || true)
+          fi
+          if [ -n "$CHANGED" ]; then
+            echo "CI/SECURITY FILES MODIFIED:"
+            echo "$CHANGED"
+            AUTHORIZED_USERS="readori"
+            if echo "$AUTHORIZED_USERS" | grep -qw "$GH_ACTOR"; then
+              echo "✅ Author is authorized"
+            else
+              echo "::error::UNAUTHORIZED modification by $GH_ACTOR"
+              exit 1
+            fi
+          else
+            echo "✅ No CI/security file changes detected"
+          fi
+
+      - name: Scan for hardcoded secrets
+        # Non-blocking — warns but does not fail the workflow
+        continue-on-error: true
+        run: |
+          echo "Scanning for potential secret leaks..."
+          FOUND=0
+          for f in .github/workflows/*.yml .github/*.md .github/*.yml; do
+            [ -f "$f" ] || continue
+            # Skip this file to avoid false-positives from the regex patterns within it
+            [ "$(basename $f)" = "security-audit.yml" ] && continue
+            if grep -nPi \
+              '(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82}|sk-[a-zA-Z0-9]{48}|AKIA[A-Z0-9]{16}|glpat-[a-zA-Z0-9_-]{20}|xox[bprs]-[a-zA-Z0-9-]+|-----BEGIN [A-Z ]+KEY-----|cfat_[a-zA-Z0-9]{30,})' \
+              "$f" 2>/dev/null; then
+              echo "::warning file=$f::Potential hardcoded secret detected — review immediately!"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" = "0" ]; then
+            echo "✅ No hardcoded secrets found"
+          else
+            echo "::warning::Potential secrets detected — see warnings above. Replace with \${{ secrets.* }}."
+          fi
+
+      - name: Verify workflow security posture
+        run: |
+          echo "Checking workflow security..."
+          ISSUES=0
+          for f in .github/workflows/*.yml; do
+            echo "--- $f ---"
+            if ! grep -q 'permissions:' "$f"; then
+              echo "::warning file=$f::Missing explicit permissions"
+              ISSUES=$((ISSUES+1))
+            fi
+            if grep -q 'pull_request_target' "$f"; then
+              echo "::error file=$f::DANGEROUS pull_request_target trigger!"
+              ISSUES=$((ISSUES+1))
+            fi
+            if grep -q 'actions/checkout' "$f" && ! grep -q 'persist-credentials: false' "$f"; then
+              echo "::warning file=$f::checkout without persist-credentials: false"
+            fi
+          done
+          echo "Security issues: $ISSUES"
+          echo "✅ Audit complete"
