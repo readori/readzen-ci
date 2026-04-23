@@ -141,7 +141,7 @@ jobs:
           # Remove leading whitespace left by heredoc indentation
           sed -i 's/^          //' wrangler.toml
 
-          # Add custom domain route if CNAME_HTTPS secret is set
+          # Custom domain: pattern must be bare hostname, no wildcards or paths
           if [ -n "$CNAME_DOMAIN" ]; then
             printf '\n[[routes]]\npattern = "%s"\ncustom_domain = true\n' "$CNAME_DOMAIN" >> wrangler.toml
             echo "✅ Custom domain configured: $CNAME_DOMAIN"
