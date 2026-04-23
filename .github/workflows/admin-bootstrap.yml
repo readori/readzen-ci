@@ -147,10 +147,9 @@ jobs:
           check GET "/api/v1/admin/stats" 401 "Admin (auth)"
           check GET "/api/v1/subscription/status" 401 "Subscription (auth)"
           check GET "/api/v1/payment/methods" 401 "Payment (auth)"
-          check GET "/api/v1/settings/user" 401 "Settings (auth)"
-          check GET "/api/v1/orders/recent" 401 "Orders (auth)"
+          check GET "/api/v1/settings/sync" 401 "Settings (auth)"
+          check GET "/api/v1/orders/history" 401 "Orders (auth)"
           check GET "/api/v1/analytics/earnings" 401 "Analytics (auth)"
-          check GET "/api/v1/realtime/poll" 401 "Realtime (auth)"
 
       - name: Post report
         if: always()
@@ -161,7 +160,11 @@ jobs:
             const action = '${{ env.ACTION }}';
             const status = '${{ job.status }}';
             const emoji = status === 'success' ? '✅' : '❌';
-            await github.rest.issues.createComment({
-              owner: 'readori', repo: 'readzen-ci', issue_number: 1,
-              body: `## ${emoji} Admin/Payment — ${action}\n\n**Status:** ${status}\n**Run:** [${context.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})\n\nSee Job Summary for details.`
-            });
+            try {
+              await github.rest.issues.createComment({
+                owner: 'readori', repo: 'readzen-ci', issue_number: 9,
+                body: `## ${emoji} Admin/Payment — ${action}\n\n**Status:** ${status}\n**Run:** [${context.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})\n\nSee Job Summary for details.`
+              });
+            } catch (e) {
+              core.warning(`Could not post report to issue #9: ${e.message}`);
+            }
