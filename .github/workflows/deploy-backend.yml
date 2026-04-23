@@ -347,6 +347,10 @@ jobs:
               `- Admin Panel: \`${workerUrl}/admin\``,
               `- Bootstrap: \`POST ${workerUrl}/api/v1/admin/bootstrap\``,
             ].join('\n');
-            await github.rest.issues.createComment({
-              owner: 'readori', repo: 'readzen-ci', issue_number: 2, body
-            });
+            try {
+              await github.rest.issues.createComment({
+                owner: 'readori', repo: 'readzen-ci', issue_number: 6, body
+              });
+            } catch (e) {
+              core.warning(`Could not post deployment report to issue #6: ${e.message}`);
+            }
