@@ -143,7 +143,7 @@ jobs:
 
           # Add custom domain route if CNAME_HTTPS secret is set
           if [ -n "$CNAME_DOMAIN" ]; then
-            printf '\n[[routes]]\npattern = "%s/*"\ncustom_domain = true\n' "$CNAME_DOMAIN" >> wrangler.toml
+            printf '\n[[routes]]\npattern = "%s"\ncustom_domain = true\n' "$CNAME_DOMAIN" >> wrangler.toml
             echo "✅ Custom domain configured: $CNAME_DOMAIN"
           fi
 
