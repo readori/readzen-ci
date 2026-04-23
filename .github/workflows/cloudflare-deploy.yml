@@ -179,7 +179,6 @@ jobs:
           STRIPE_WH_VAL: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           PAYPAL_ID_VAL: ${{ secrets.PAYPAL_CLIENT_ID }}
           PAYPAL_SECRET_VAL: ${{ secrets.PAYPAL_CLIENT_SECRET }}
-          CORS_ORIGINS_VAL: ${{ secrets.CORS_ORIGINS }}
           RESEND_API_KEY_VAL: ${{ secrets.RESEND_API_KEY }}
           TELEGRAM_BOT_TOKEN_VAL: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID_VAL: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -194,8 +193,6 @@ jobs:
           else
             openssl rand -hex 32 | npx wrangler secret put SECRET_KEY
           fi
-          CORS_VAL="${CORS_ORIGINS_VAL:-https://web.heiqiba.com,https://readzen-api.iilove.workers.dev}"
-          echo "$CORS_VAL" | npx wrangler secret put CORS_ORIGINS
           if [ -n "$STRIPE_KEY_VAL" ]; then
             echo "$STRIPE_KEY_VAL" | npx wrangler secret put STRIPE_SECRET_KEY
           fi
