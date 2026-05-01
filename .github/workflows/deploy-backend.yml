@@ -236,12 +236,65 @@ jobs:
       - name: Run D1 migrations (safe — CREATE TABLE IF NOT EXISTS)
         # Only runs on explicit migrate-db, setup-resources, or full-setup-and-deploy.
         # NEVER runs on push-triggered deploys to prevent accidental data loss.
+        # Uses Cloudflare D1 REST API directly — no wrangler flag compatibility issues.
         if: env.DEPLOY_ACTION == 'setup-resources' || env.DEPLOY_ACTION == 'full-setup-and-deploy' || env.DEPLOY_ACTION == 'migrate-db'
+        env:
+          D1_DB_ID: ${{ steps.resources.outputs.d1_id }}
         working-directory: cloudflare-backend
         run: |
-          echo "Running safe schema migration (CREATE TABLE IF NOT EXISTS — no data loss)..."
-          npx wrangler d1 execute readzen-db --remote --file=./schema.sql
-          echo "✅ Database schema applied"
+          python3 << 'PYEOF'
+          import os, re, json, sys
+          import urllib.request, urllib.error
+
+          account_id = os.environ['CLOUDFLARE_ACCOUNT_ID']
+          api_token  = os.environ['CLOUDFLARE_API_TOKEN']
+          db_id      = os.environ.get('D1_DB_ID', '').strip()
+
+          if not db_id:
+              print("ERROR: D1_DB_ID is empty", file=sys.stderr)
+              sys.exit(1)
+
+          url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{db_id}/raw"
+          headers = {"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"}
+          print(f"D1 database ID: {db_id}")
+
+          def exec_sql(sql):
+              body = json.dumps({"sql": sql}).encode()
+              req  = urllib.request.Request(url, data=body, headers=headers, method="POST")
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      return json.loads(r.read()), r.status
+              except urllib.error.HTTPError as e:
+                  return json.loads(e.read()), e.code
+
+          with open('schema.sql', encoding='utf-8') as f:
+              sql_raw = f.read()
+
+          no_comments = re.sub(r'--[^\n]*', '', sql_raw)
+          stmts = [s.strip() for s in no_comments.split(';') if s.strip()]
+          print(f"Executing {len(stmts)} SQL statements...")
+
+          errors = 0
+          for i, stmt in enumerate(stmts, 1):
+              result, status = exec_sql(stmt)
+              ok       = result.get('success', False)
+              err_msgs = [e.get('message', '') for e in result.get('errors', [])]
+              err_str  = '; '.join(err_msgs)
+              label    = stmt[:80].replace('\n', ' ')
+              tolerable = any(p in err_str.lower() for p in
+                              ('already exists', 'duplicate column', 'table already',
+                               'already has a column', 'no such index'))
+              if ok:
+                  print(f"  OK [{i}/{len(stmts)}] {label}")
+              elif tolerable:
+                  print(f"  SKIP [{i}/{len(stmts)}] already exists: {label}")
+              else:
+                  print(f"  ERR [{i}/{len(stmts)}] HTTP={status} err={err_str}: {label}", file=sys.stderr)
+                  errors += 1
+
+          print(f"Done: {len(stmts)} statements, {errors} hard errors")
+          sys.exit(1 if errors > 0 else 0)
+          PYEOF
 
       - name: Set Worker secrets
         if: env.DEPLOY_ACTION == 'setup-resources' || env.DEPLOY_ACTION == 'full-setup-and-deploy'
@@ -359,6 +412,10 @@ jobs:
               `- Admin Panel: \`${workerUrl}/admin\``,
               `- Bootstrap: \`POST ${workerUrl}/api/v1/admin/bootstrap\``,
             ].join('\n');
-            await github.rest.issues.createComment({
-              owner: 'readori', repo: 'readzen-ci', issue_number: 2, body
-            });
+            try {
+              await github.rest.issues.createComment({
+                owner: 'readori', repo: 'readzen-ci', issue_number: 6, body
+              });
+            } catch (e) {
+              core.warning(`Could not post deployment report to issue #6: ${e.message}`);
+            }
