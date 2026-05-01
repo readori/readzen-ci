@@ -236,31 +236,65 @@ jobs:
       - name: Run D1 migrations (safe — CREATE TABLE IF NOT EXISTS)
         # Only runs on explicit migrate-db, setup-resources, or full-setup-and-deploy.
         # NEVER runs on push-triggered deploys to prevent accidental data loss.
+        # Uses Cloudflare D1 REST API directly — no wrangler flag compatibility issues.
         if: env.DEPLOY_ACTION == 'setup-resources' || env.DEPLOY_ACTION == 'full-setup-and-deploy' || env.DEPLOY_ACTION == 'migrate-db'
+        env:
+          D1_DB_ID: ${{ steps.resources.outputs.d1_id }}
         working-directory: cloudflare-backend
         run: |
-          echo "Running safe schema migration (CREATE TABLE IF NOT EXISTS — no data loss)..."
+          python3 << 'PYEOF'
+import os, re, json, sys
+import urllib.request, urllib.error
 
-          # Step 1: Apply base schema (only CREATE TABLE / CREATE INDEX / INSERT OR IGNORE).
-          # --yes suppresses the interactive "Are you sure?" prompt that breaks CI.
-          # We strip ALTER TABLE lines here because D1 may reject them when columns exist.
-          grep -v '^ALTER TABLE' schema.sql > /tmp/schema_base.sql
-          npx wrangler d1 execute readzen-db --remote --yes --file=/tmp/schema_base.sql
-          echo "✅ Base schema applied"
+account_id = os.environ['CLOUDFLARE_ACCOUNT_ID']
+api_token  = os.environ['CLOUDFLARE_API_TOKEN']
+db_id      = os.environ.get('D1_DB_ID', '').strip()
 
-          # Step 2: Apply ALTER TABLE column additions one at a time.
-          # Each is wrapped in set +e / set -e so a "duplicate column" error (column already
-          # exists) is treated as a no-op rather than a fatal failure.
-          set +e
-          while IFS= read -r stmt; do
-            # Skip blank lines and comment lines
-            [[ -z "$stmt" || "$stmt" == --* ]] && continue
-            echo "  → $stmt"
-            npx wrangler d1 execute readzen-db --remote --yes --command="$stmt" 2>&1 || true
-          done < <(grep '^ALTER TABLE' schema.sql)
-          set -e
+if not db_id:
+    print("ERROR: D1_DB_ID is empty — D1 database was not created/found in prior steps", file=sys.stderr)
+    sys.exit(1)
 
-          echo "✅ Column migrations applied (existing columns skipped)"
+url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{db_id}/raw"
+headers = {"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"}
+print(f"D1 database ID: {db_id}")
+
+def exec_sql(sql):
+    body = json.dumps({"sql": sql}).encode()
+    req  = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read()), r.status
+    except urllib.error.HTTPError as e:
+        return json.loads(e.read()), e.code
+
+with open('schema.sql', encoding='utf-8') as f:
+    sql_raw = f.read()
+
+# Strip line comments then split on semicolons
+no_comments = re.sub(r'--[^\n]*', '', sql_raw)
+stmts = [s.strip() for s in no_comments.split(';') if s.strip()]
+print(f"Executing {len(stmts)} SQL statements...")
+
+errors = 0
+for i, stmt in enumerate(stmts, 1):
+    result, status = exec_sql(stmt)
+    ok       = result.get('success', False)
+    err_msgs = [e.get('message', '') for e in result.get('errors', [])]
+    err_str  = '; '.join(err_msgs)
+    label    = stmt[:80].replace('\n', ' ')
+    tolerable = any(p in err_str.lower() for p in
+                    ('already exists', 'duplicate column', 'table already'))
+    if ok:
+        print(f"  ✅ [{i}/{len(stmts)}] {label}")
+    elif tolerable:
+        print(f"  ⏭  [{i}/{len(stmts)}] Skipped (already exists): {label}")
+    else:
+        print(f"  ❌ [{i}/{len(stmts)}] HTTP={status} err={err_str}: {label}", file=sys.stderr)
+        errors += 1
+
+print(f"\n{'✅' if errors == 0 else '❌'} Done: {len(stmts)} statements, {errors} hard errors")
+sys.exit(1 if errors > 0 else 0)
+PYEOF
 
       - name: Set Worker secrets
         if: env.DEPLOY_ACTION == 'setup-resources' || env.DEPLOY_ACTION == 'full-setup-and-deploy'
