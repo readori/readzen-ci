@@ -251,6 +251,7 @@ jobs:
           STRIPE_WH: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           PP_ID: ${{ secrets.PAYPAL_CLIENT_ID }}
           PP_SECRET: ${{ secrets.PAYPAL_CLIENT_SECRET }}
+          CF_ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
         run: |
           JWT_SECRET=$(openssl rand -hex 32)
           echo "$JWT_SECRET" | npx wrangler secret put JWT_SECRET
@@ -261,6 +262,17 @@ jobs:
           echo "## 🔐 Deployment Secrets" >> $GITHUB_STEP_SUMMARY
           echo "**SECRET_KEY** (admin bootstrap): \`$SECRET_KEY\`" >> $GITHUB_STEP_SUMMARY
           echo "⚠️ Save this! POST /api/v1/admin/bootstrap" >> $GITHUB_STEP_SUMMARY
+
+          if [ -n "$CF_ADMIN_API_KEY" ]; then
+            echo "$CF_ADMIN_API_KEY" | npx wrangler secret put ADMIN_API_KEY
+            echo "✅ ADMIN_API_KEY set"
+          else
+            GENERATED_ADMIN_KEY=$(openssl rand -hex 32)
+            echo "$GENERATED_ADMIN_KEY" | npx wrangler secret put ADMIN_API_KEY
+            echo "## 🔑 Auto-generated ADMIN_API_KEY" >> $GITHUB_STEP_SUMMARY
+            echo "\`$GENERATED_ADMIN_KEY\`" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ Save this and add it to repo secrets as ADMIN_API_KEY!" >> $GITHUB_STEP_SUMMARY
+          fi
 
           if [ -n "$STRIPE_KEY" ]; then
             echo "$STRIPE_KEY" | npx wrangler secret put STRIPE_SECRET_KEY

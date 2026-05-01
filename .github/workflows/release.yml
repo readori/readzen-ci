@@ -63,12 +63,17 @@ jobs:
             base64 -d android/keystore/readzen.keystore.b64 > /tmp/readzen.keystore
             echo "CI_KEYSTORE_PATH=/tmp/readzen.keystore" >> $GITHUB_ENV
             echo "KEYSTORE_ALIAS=readzen-release" >> $GITHUB_ENV
+            echo "CI_KEYSTORE_PASSWORD=readzen2024" >> $GITHUB_ENV
+            echo "CI_KEY_PASSWORD=readzen2024" >> $GITHUB_ENV
             echo "✅ Using repo-committed stable keystore"
           # Priority 2: secret-provided keystore
           elif [ -n "${{ secrets.CI_KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.CI_KEYSTORE_BASE64 }}" | base64 -d > /tmp/readzen.keystore
             echo "CI_KEYSTORE_PATH=/tmp/readzen.keystore" >> $GITHUB_ENV
             echo "KEYSTORE_ALIAS=readzen-release" >> $GITHUB_ENV
+            KSTORE_PASS="${{ secrets.CI_KEYSTORE_PASSWORD }}"
+            echo "CI_KEYSTORE_PASSWORD=${KSTORE_PASS:-readzen2024}" >> $GITHUB_ENV
+            echo "CI_KEY_PASSWORD=${KSTORE_PASS:-readzen2024}" >> $GITHUB_ENV
             echo "✅ Using CI_KEYSTORE_BASE64 secret keystore"
           else
             echo "⚠️ No stable keystore — generating temporary one"
@@ -77,6 +82,9 @@ jobs:
               -dname "CN=ReadZen CI, OU=Dev, O=ReadZen, L=SF, ST=CA, C=US" -noprompt
             echo "CI_KEYSTORE_PATH=/tmp/readzen.keystore" >> $GITHUB_ENV
             echo "KEYSTORE_ALIAS=readzen-release" >> $GITHUB_ENV
+            echo "CI_KEYSTORE_PASSWORD=readzen2024" >> $GITHUB_ENV
+            echo "CI_KEY_PASSWORD=readzen2024" >> $GITHUB_ENV
+            echo "⚠️ Temporary keystore generated — replace with stable keystore before publishing"
           fi
 
       - name: Generate Gradle Wrapper

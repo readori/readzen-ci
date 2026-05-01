@@ -54,6 +54,8 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-ci-only
           JWT_SECRET: test-jwt-secret-ci-only
+          ADMIN_API_KEY: test-admin-api-key-ci-only
+          REQUIRE_INVITE_CODE: "false"
         run: |
           cd backend
           python -m pytest tests/ -v --tb=short
