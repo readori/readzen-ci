@@ -4,14 +4,14 @@ Public CI/CD pipeline for [ReadZen].
 
 Uses public repo CI minutes to build, test, and deploy from the private `readori/readzen` repository.
 
+> **Architecture**: Backend is **Cloudflare Workers + D1 + KV only**. No Python / Docker / SSH required.
+
 ## Workflows
 
 | Workflow | Trigger | Description |
 |----------|---------|-------------|
 | **Android Build** | Manual / Dispatch | Builds debug APK + runs lint |
-| **Backend Tests** | Manual / Dispatch | Python tests with Postgres + Redis |
-| **Deploy Backend** | Manual (`TRIGGER_DEPLOY`) | Full Cloudflare Worker deploy + D1 migrations |
-| **Python Backend Deploy** | Manual | Deploy FastAPI backend via SSH + Docker Compose |
+| **Deploy Backend** | Manual / `TRIGGER_DEPLOY` push | Cloudflare Worker deploy + D1 migrations |
 | **Cloudflare Setup** | Manual | Creates D1 + KV resources, init schema |
 | **Release Build** | Manual | Release APK + TypeScript check |
 | **Admin Bootstrap** | Manual | Bootstrap admin user / update payment secrets |
@@ -34,17 +34,6 @@ Uses public repo CI minutes to build, test, and deploy from the private `readori
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (optional) |
 | `PAYPAL_CLIENT_ID` | PayPal client ID (optional) |
 | `PAYPAL_CLIENT_SECRET` | PayPal client secret (optional) |
-
-### Python FastAPI Backend (Docker / SSH)
-| Secret | Description |
-|--------|-------------|
-| `BACKEND_SSH_HOST` | Hostname or IP of the production server |
-| `BACKEND_SSH_USER` | SSH username (e.g. `deploy`) |
-| `BACKEND_SSH_KEY` | SSH private key (ED25519 or RSA) |
-| `BACKEND_DATABASE_URL` | PostgreSQL asyncpg URL |
-| `BACKEND_REDIS_URL` | Redis URL |
-| `BACKEND_SECRET_KEY` | FastAPI `SECRET_KEY` |
-| `BACKEND_JWT_SECRET` | JWT signing secret |
 
 ### Android Build
 | Secret | Description |

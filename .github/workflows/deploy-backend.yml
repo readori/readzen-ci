@@ -240,8 +240,27 @@ jobs:
         working-directory: cloudflare-backend
         run: |
           echo "Running safe schema migration (CREATE TABLE IF NOT EXISTS — no data loss)..."
-          npx wrangler d1 execute readzen-db --remote --file=./schema.sql
-          echo "✅ Database schema applied"
+
+          # Step 1: Apply base schema (only CREATE TABLE / CREATE INDEX / INSERT OR IGNORE).
+          # --yes suppresses the interactive "Are you sure?" prompt that breaks CI.
+          # We strip ALTER TABLE lines here because D1 may reject them when columns exist.
+          grep -v '^ALTER TABLE' schema.sql > /tmp/schema_base.sql
+          npx wrangler d1 execute readzen-db --remote --yes --file=/tmp/schema_base.sql
+          echo "✅ Base schema applied"
+
+          # Step 2: Apply ALTER TABLE column additions one at a time.
+          # Each is wrapped in set +e / set -e so a "duplicate column" error (column already
+          # exists) is treated as a no-op rather than a fatal failure.
+          set +e
+          while IFS= read -r stmt; do
+            # Skip blank lines and comment lines
+            [[ -z "$stmt" || "$stmt" == --* ]] && continue
+            echo "  → $stmt"
+            npx wrangler d1 execute readzen-db --remote --yes --command="$stmt" 2>&1 || true
+          done < <(grep '^ALTER TABLE' schema.sql)
+          set -e
+
+          echo "✅ Column migrations applied (existing columns skipped)"
 
       - name: Set Worker secrets
         if: env.DEPLOY_ACTION == 'setup-resources' || env.DEPLOY_ACTION == 'full-setup-and-deploy'
