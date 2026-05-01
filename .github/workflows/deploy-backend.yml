@@ -282,7 +282,8 @@ jobs:
               err_str  = '; '.join(err_msgs)
               label    = stmt[:80].replace('\n', ' ')
               tolerable = any(p in err_str.lower() for p in
-                              ('already exists', 'duplicate column', 'table already'))
+                              ('already exists', 'duplicate column', 'table already',
+                               'already has a column', 'no such index'))
               if ok:
                   print(f"  OK [{i}/{len(stmts)}] {label}")
               elif tolerable:
